@@ -4,16 +4,20 @@
 
 import bpy
 import bmesh
-from bmesh.types import BMEdge, BMFace
+from bmesh.types import BMEdge, BMFace, BMLoop
+from bpy import context
 
 from bpy.types import Mesh, Object, Collection, VertexGroup
 
 from mathutils import Vector
-from typing import List
+from typing import List, Tuple
 
-#kek check
+
+
+
 ##############################################
 # функции обхода loop
+# не работают на объектах, где лупа не зациклена и не обрамлена не квадами
 
 def is_quad(face: BMFace) -> bool:
     '''
@@ -21,118 +25,85 @@ def is_quad(face: BMFace) -> bool:
     '''
     return (len(face.loops) == 4)
 
-# в этой и в loop_go_back используется 4 ~одинаковых куска кода, которые нужна менять одновременно!
-# надо переделать так: loop_go_back = функци обхода в одну сторону, => полный обход = 2 обхода в разные стороны, и никакого дублирующегося кода!
-# TODO!!!!!!!!
-def go_through_loop(starting_edge: BMEdge) -> List[BMFace]:
-    '''
-    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
-    Работает только для квадов, попав на не квад - останавливается
-    Сначала идет в одном направлении от ребра, затем в другом (с помощью функции loop_go_back)
-    Возвращает список всех граней, вошедших в face loop
-    '''
-    
+def collect_face_loop(starting_edge: BMEdge) -> List[BMFace]:
     faces_in_loop = []
-    # go forward
+    #обход в одну сторону
     loop = starting_edge.link_loops[0]
-    
-    # ??????????????????????????? мб проблема с направлениями, мб надо судя именно face подавать чтобы было точнее, а не ребро!
-    if (not is_quad(loop.face)):
-        return []
-    #
-    else:
-        faces_in_loop.append(loop.face)
-    
-    loop.edge.select = True
-    radial_loop = loop.link_loop_radial_next
-    # проверяем, следующая грань это квада? 
-    is_next_face_quad = is_quad(radial_loop.face)
-    if (not is_next_face_quad):
-        # go back
-        #radial_loop.face.select = True
-        faces_in_loop.extend(loop_go_back(starting_edge))
+
+  #  print(loop)
+  #  print(loop.link_loop_next.link_loop_next)
+  #  print(loop.link_loop_radial_next)
+  #  print(loop.link_loop_radial_next.link_loop_next.link_loop_next)
+
+
+    faces_in_loop_one_direction, was_cycled_loop = loop_go(loop, False)
+    faces_in_loop.extend(faces_in_loop_one_direction)
+    if (was_cycled_loop):
         return faces_in_loop
-    else:
-        faces_in_loop.append(radial_loop.face)
-#    radial_loop.edge.select = True
-    next_loop = radial_loop.link_loop_next.link_loop_next
-    next_loop.edge.select = True
-    
-    # цикл прыжков для сбора всей лупы
-    
-    loop = next_loop
-    while next_loop.edge != starting_edge:
-        radial_loop = loop.link_loop_radial_next
-#        radial_loop.edge.select = True
-
-        is_next_face_quad = is_quad(radial_loop.face)
-        # next_face_orto_loop.face.select = is_quad(next_face_orto_loop.face)
-        if (not is_next_face_quad):
-            # go back
-            #radial_loop.face.select = True
-            faces_in_loop.extend(loop_go_back(starting_edge))
-            return faces_in_loop
-        else:
-            faces_in_loop.append(radial_loop.face)
-
-        next_loop = radial_loop.link_loop_next.link_loop_next
-        next_loop.edge.select = True
-        loop = next_loop
-        
-    #loop_go_back(starting_edge)
-    faces_in_loop.extend(loop_go_back(starting_edge))
+    #обход в другую сторону, если не было цикла
+    loop = starting_edge.link_loops[0].link_loop_next.link_loop_next
+    faces_in_loop_two_direction, was_cycled_loop = loop_go(loop, True)
+    faces_in_loop.extend(faces_in_loop_two_direction)
     return faces_in_loop
-    
-def loop_go_back(starting_edge: BMEdge) -> List[BMFace]:
+
+def loop_go(starting_loop: BMLoop, is_second_go: bool) -> (List[BMFace], bool):
     '''
     Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
     Работает только для квадов, попав на не квад - останавливается
     Сначала идет только в одном направлении
     Возвращает список всех граней, вошедших в face loop
+    is_second_go нужен, чтобы при обходе в обратную сторону не добавлять первую грань еще раз в список
     '''
     faces_in_loop = []
-    loop = starting_edge.link_loops[0].link_loop_next.link_loop_next
-    loop.edge.select = True
+    loop = starting_loop
+    #loop.edge.select = True
     
     # ??????????????????????????? мб проблема с направлениями, мб надо судя именно face подавать чтобы было точнее, а не ребро!
     if (not is_quad(loop.face)):
-        return []
+        return [], False
     #
-    else:
+    if (not is_second_go):
         faces_in_loop.append(loop.face)
     
     radial_loop = loop.link_loop_radial_next
+    # проверяем, что mesh оборвался (плоская поверхность)
+    if (radial_loop.face == loop.face):
+        return faces_in_loop, False
     # проверяем, следующая грань это квада? 
     is_next_face_quad = is_quad(radial_loop.face)
     if (not is_next_face_quad):
-        # go back
-        #radial_loop.face.select = True
-        return faces_in_loop
+        # уперлись в не квадратную грань, конец обхода
+        return faces_in_loop, False
     else:
         faces_in_loop.append(radial_loop.face)
-#    radial_loop.edge.select = True
     next_loop = radial_loop.link_loop_next.link_loop_next
     next_loop.edge.select = True
     
-    # цикл прыжков для сбора всей лупы
+    # цикл прыжков для сбора всей лупы пока не упремся в не кваду или не вернемся в начальную (замкнутая лупа)
+    # или не закончится плоский меш
     
     loop = next_loop
-    while next_loop.edge != starting_edge:
+    while next_loop.edge != starting_loop.edge:
         radial_loop = loop.link_loop_radial_next
-#        radial_loop.edge.select = True
+        next_loop = radial_loop.link_loop_next.link_loop_next
+        # циклический меш
+        if (next_loop.edge == starting_loop.edge):
+            break
 
+        # проверяем, что mesh оборвался (плоская поверхность)
+        if (radial_loop.face == loop.face):
+            return faces_in_loop, False
         # проверяем, следующая грань это квада? 
         is_next_face_quad = is_quad(radial_loop.face)
         # next_face_orto_loop.face.select = is_quad(next_face_orto_loop.face)
         if (not is_next_face_quad):
-            return faces_in_loop
+            return faces_in_loop, False
         else:
             faces_in_loop.append(radial_loop.face)
 
-        next_loop = radial_loop.link_loop_next.link_loop_next
         next_loop.edge.select = True
         loop = next_loop
-    return faces_in_loop
+    return faces_in_loop, True
    
 ##################################
 # функции создания нового пустого объекта с пустым мешем без вертекс групп
@@ -281,9 +252,11 @@ def make_point_cloud(mesh: Mesh, obj: Object, faces: List[BMFace], iteration: in
     verts_id_end = verts_id_start + len(vertices) - 1
     # вызов функции создания группы и добавления в группу
     group_name = grouping_vertices(obj, iteration, verts_id_start, verts_id_end)
+    
     check_vertexgroup_verts(obj, group_name)
 
 ################################
+
 
 def main():
     '''
@@ -316,7 +289,9 @@ def main():
         
     # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!        
         
-    faces_in_loop = go_through_loop(starting_edge)
+    #faces_in_loop = go_through_loop(starting_edge)
+    faces_in_loop = collect_face_loop(starting_edge)
+    print(faces_in_loop)
     for face in faces_in_loop:
         face.select = True
     make_point_cloud(mesh, obj, faces_in_loop, 1)
@@ -330,4 +305,6 @@ def main():
 if __name__ == "__main__":
     main()
     
-    
+# для дебага из vscode....
+# может ломать результат в blender    
+main()
