@@ -4,13 +4,13 @@
 
 import bpy
 import bmesh
-from bmesh.types import BMEdge, BMFace, BMLoop
+from bmesh.types import BMEdge, BMFace, BMLoop, BMesh
 from bpy import context
 
 from bpy.types import Mesh, Object, Collection, VertexGroup
 
 from mathutils import Vector
-from typing import List, Tuple
+from typing import List, Tuple, Set
 
 
 
@@ -161,6 +161,8 @@ def vertices_to_pydata(mesh: Mesh, v: List[Vector]) -> None:
     '''
     Привязка конкретных точек [(x, y, z), (...), ...] к мешу
     '''
+    #!!!!!!! посмотреть видос про меш и понять, как добавить в меш новые вершины. мб надо все же bmesh.
+    #mesh.vertices.
     mesh.from_pydata(v, [], [])    
 
 # достать из Object его mesh почему-то достаточно obj.data. Почему?
@@ -203,6 +205,7 @@ def group_new(obj: Object, group_name: str) -> VertexGroup:
 
 def grouping_vertices(obj: Object, iteration: int, verts_id_start: int, verts_id_end: int) -> str:
     '''
+    УСТАРЕЛА
     Функция создает новую группу для точек, задает ей имя с итерацией,
     добавляет все точки заданного объекта с индексами от start до end включительно
     в эту группу
@@ -212,8 +215,158 @@ def grouping_vertices(obj: Object, iteration: int, verts_id_start: int, verts_id
     v_group = group_new(obj, group_name)
     #print("Obj groups:")
     #print(len(obj.vertex_groups))
+
+
     v_group.add(range(verts_id_start, verts_id_end + 1), 1.0, 'ADD')
     return group_name
+
+def add_verts_to_point_cloud_old(bm: BMesh, faces: List[BMFace]) -> List[Vector]:
+    '''
+    УСТАРЕЛА
+    '''
+    vertices = []
+    # сбор центров
+    for face in faces:
+        vertices.append(face.calc_center_median())
+    for v in vertices:
+        bm.verts.new(v)
+    bm.verts.ensure_lookup_table()
+    return vertices
+
+#def make_point_cloud(mesh: Mesh, obj: Object, faces: List[BMFace], iteration: int) -> None:
+def make_point_cloud(bm: BMesh, obj: Object, faces: List[BMFace], iteration: int) -> None:
+    '''
+    УСТАРЕЛА
+    Функция получает на вход набор граней из одной face loop,
+    чтобы превратить их в набор точек с общей vertex group и добавить их
+    в облако точек (obj, mesh)
+    iteration нужна чтобы создавать группу с итерацией в названии
+    
+    !!! эта функция опирается на то, что все точки добавляются в меш с индексом от
+    (последний индекс добавлениия -> длина добавления) и точки в этом диапазоне индексов все
+    нужно добавить в одну группу
+    '''
+    # не факт что id совпадут
+    verts_id_start = len(bm.verts)
+    
+    print("--- bmesh verts before adding:")
+    for idx, v in enumerate(bm.verts):
+        print(idx, v)
+    #добавление вершин в pointcloud и ????? обновление меша?
+    vertices = add_verts_to_point_cloud_old(bmesh, faces)
+    print("bmesh verts after adding:")
+    for idx, v in enumerate(bm.verts):
+        print(idx, v)
+
+    #не факт, что id совпадут
+    verts_id_end = verts_id_start + len(vertices) - 1
+    
+    # добавление в меш
+    #vertices_to_pydata(mesh, vertices)
+
+    #layers = bm.verts.layers.deform
+    #print("lets print layers")
+    #for l in layers:
+ #       print(l)
+   
+   
+    # вызов функции создания группы и добавления в группу
+   # group_name = grouping_vertices(obj, iteration, verts_id_start, verts_id_end)
+    
+   # check_vertexgroup_verts(obj, group_name)
+
+################################
+
+
+
+
+# каждый face может принадлежать 2 лупам, но каждое ребро принадлежит только 1 кольцу 
+# стоит ли передавать множество не самих bmface а только их id? TODO
+# set будет передаваться по ссылке или нет? TODO
+def loops_for_loop(start_quad: BMFace, is_horisontal: bool, visited_faces: Set[BMFace], obj: Object, mesh: Mesh) -> None:
+    '''
+    идти вдоль лупы, содержащей данную quad вдоль заданного направления и собирать все принадлежащие ей
+    перпендикулярные лупы
+    '''
+    
+    # уже знаем, что грань квадратная
+    # или нам это не надо,тк заложено в функцию обхода лупы? TODO!
+    edge = start_quad.edges[0]
+    loop = edge.link_loops[0]
+    if (is_horisontal):
+        edge = loop.link_loop_next.edge
+        #loop = edge.link_loops[0]
+    #else:
+        #loop = start_quad.loops[1]
+
+    faces_in_loop, edge_ring = collect_face_loop(edge)
+    for idx, e in enumerate(edge_ring):
+        loop = e.link_loops[0]
+        # не будет ли тут путаницы?
+        start_edge = loop.link_loop_next.edge
+        faces_in_loop_inner, edge_ring_inner = collect_face_loop(start_edge)
+        make_point_cloud(mesh, obj, faces_in_loop_inner, idx)
+
+def loops_for_loop_both_orientations(start_quad: BMFace, visited_faces: Set[BMFace], obj: Object, mesh: Mesh):
+    loops_for_loop(start_quad, True, visited_faces, obj, mesh)
+    loops_for_loop(start_quad, False, visited_faces, obj, mesh)
+    pass
+
+################################
+
+################################
+
+def add_verts_to_point_cloud(bm: BMesh, vertices: List[Vector]) -> None:
+    '''
+    функция добавляет точки в bm
+    '''
+    idx_start = len(bm.verts)
+    for v in vertices:
+        bm.verts.new(v)
+    bm.verts.ensure_lookup_table()
+
+    for i in range(idx_start, idx_start + len(vertices)):
+        bm.verts[i].index = i
+
+# вместо этой уже есть хорошая group_new       
+#def vgroup_new(group_name: str, obj: Object) -> VertexGroup:
+#    v_group = group_new(obj, group_name)
+#    return v_group
+
+def grouping_layers(bm: BMesh, id_start: int, id_end: int, group_id: int) -> None :
+    '''
+    функция достает нужный слой bm и в этот слой каждой точке записывает vertex_group с дефолтным весом 1
+    '''
+    weight_default = 1
+    layer = bm.verts.layers.deform.verify() # достаем название слоя, где перечислены v_groups для каждой вершины.
+    # verify такой слой создает, если его нету, или дает известный.
+    for i in range(id_start, id_end + 1):
+        # если v[layer] это словарь, то вот как добавить группу в этот словарь!
+        #print("add vert ", i, " to group ", group_id)
+        bm.verts[i][layer][group_id] = weight_default
+        
+
+def add_verts_and_group(bm: BMesh, obj: Object, vertices: List[Vector], iter: int) -> None:
+    '''
+    функция добавляет набор точек в bm (pointcloud) и добавляет в слой этого bm
+    созданный здесь же vertex group
+    все данные хранятся в bm и не будут видны пока не сделаем bm.to_mesh и obj.data.update снаружи!
+    '''
+
+    #добавить точки в bm
+    id_start = len(bm.verts)
+    id_end = id_start + len(vertices) - 1
+    add_verts_to_point_cloud(bm, vertices)
+    
+    #создать vertex group
+    group_name = "curve_"+str(iter)
+    v_group = group_new(obj, group_name)
+    #group_id = obj.vertex_groups[group_name].index
+    group_id = v_group.index
+
+    #добавить группу в слой bm и точки в группу
+    grouping_layers(bm, id_start, id_end, group_id)
+    #check_vertexgroup_verts(obj, group_name)
 
 def check_vertexgroup_verts(obj: Object, group_name: str):
     #как досать вершины и их номер группы?
@@ -227,36 +380,15 @@ def check_vertexgroup_verts(obj: Object, group_name: str):
     vertexes_from_group = [vert for vert in obj.data.vertices if obj.vertex_groups[group_name].index in [i.group for i in vert.groups]]
     v_ids = [v.index for v in vertexes_from_group]
     print("Group [", group_name, "] = ", len(v_ids))
-    print(v_ids)
-    
+    print(v_ids)    
 
-def make_point_cloud(mesh: Mesh, obj: Object, faces: List[BMFace], iteration: int) -> None:
-    '''
-    Функция получает на вход набор граней из одной face loop,
-    чтобы превратить их в набор точек с общей vertex group и добавить их
-    в облако точек (obj, mesh)
-    iteration нужна чтобы создавать группу с итерацией в названии
+#def check_groups(obj: Object):
+#    names = ["curve_1", "curve_2"]
+#    for name in names:
+#        check_vertexgroup_verts(obj, name)
     
-    !!! эта функция опирается на то, что все точки добавляются в меш с индексом от
-    (последний индекс добавлениия -> длина добавления) и точки в этом диапазоне индексов все
-    нужно добавить в одну группу
-    '''
-    vertices = []
-    # сбор центров
-    for face in faces:
-        vertices.append(face.calc_center_median())
-    #print(vertices)
-    verts_id_start = len(mesh.vertices)
-    # добавление в меш
-    vertices_to_pydata(mesh, vertices)
-    verts_id_end = verts_id_start + len(vertices) - 1
-    # вызов функции создания группы и добавления в группу
-    group_name = grouping_vertices(obj, iteration, verts_id_start, verts_id_end)
-    
-    check_vertexgroup_verts(obj, group_name)
 
 ################################
-
 
 def main():
     '''
@@ -275,8 +407,11 @@ def main():
     # создаем объект, меш, привязываем к коллекции, все пустое.
     # это - будущее облако точек.
     name = "PointCloud"
-    obj = make_mesh_obj_etc_for_pointcloud(name)
-    mesh = obj.data
+    pointcloud_obj = make_mesh_obj_etc_for_pointcloud(name)
+    pointcloud_mesh = pointcloud_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    pointcloud_bm = bmesh.new()
+    pointcloud_bm.from_mesh(pointcloud_mesh)
 
     # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
     # TODO: переделать на face?
@@ -294,13 +429,34 @@ def main():
     print(faces_in_loop)
     for face in faces_in_loop:
         face.select = True
-    make_point_cloud(mesh, obj, faces_in_loop, 1)
-    
-    
-    # обновление экрана
+    #make_point_cloud(pointcloud_bm, pointcloud_obj, faces_in_loop, 1)
+    vertices = []
+    for face in faces_in_loop:
+        vertices.append(face.calc_center_median())
+    add_verts_and_group(pointcloud_bm, pointcloud_obj, vertices, 1)
+
+    faces_in_loop = collect_face_loop(bm.edges[10])
+    print(faces_in_loop)
+    for face in faces_in_loop:
+        face.select = True
+    #make_point_cloud(pointcloud_mesh, pointcloud_obj, faces_in_loop, 2)
+    vertices = []
+    for face in faces_in_loop:
+        vertices.append(face.calc_center_median())
+    add_verts_and_group(pointcloud_bm, pointcloud_obj, vertices, 2)
+
+    # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
-    
+    # обновление point cloud на экране
+    pointcloud_bm.to_mesh(pointcloud_mesh)
+    pointcloud_obj.data.update()
+
+    check_vertexgroup_verts(mesh_obj, 'curve_1')
+    check_vertexgroup_verts(mesh_obj, 'curve_2')
+
+    # очистка памяти от bm
     bm.free()
+    pointcloud_bm.free()
     
 if __name__ == "__main__":
     main()
