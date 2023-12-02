@@ -451,8 +451,8 @@ def main():
     pointcloud_bm.to_mesh(pointcloud_mesh)
     pointcloud_obj.data.update()
 
-    check_vertexgroup_verts(mesh_obj, 'curve_1')
-    check_vertexgroup_verts(mesh_obj, 'curve_2')
+    check_vertexgroup_verts(pointcloud_obj, 'curve_1')
+    check_vertexgroup_verts(pointcloud_obj, 'curve_2')
 
     # очистка памяти от bm
     bm.free()
