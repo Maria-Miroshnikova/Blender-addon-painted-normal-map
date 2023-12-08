@@ -7,7 +7,7 @@ import bmesh
 from bmesh.types import BMEdge, BMFace, BMLoop, BMesh
 from bpy import context
 
-from bpy.types import Mesh, Object, Collection, VertexGroup
+from bpy.types import Mesh, Object, Collection, VertexGroup, Curve
 
 from mathutils import Vector
 from typing import List, Tuple, Set
@@ -387,10 +387,21 @@ def check_vertexgroup_verts(obj: Object, group_name: str):
 #    for name in names:
 #        check_vertexgroup_verts(obj, name)
     
+################################
+
+# как создать кривую?
+# как добавить ребро в кривую?
+
+def make_curve_from_vertices():
+    bpy.data.curves.new()
+    pass
+
+
 
 ################################
 
-def main():
+#exploring face loops and vertex groups
+def main_loops():
     '''
     Эта функция вызываеися из edit mode, Edge (2)
     Необходимо чтобы было выбрано ребро, иначе будет выбрано случайное
@@ -408,6 +419,7 @@ def main():
     # это - будущее облако точек.
     name = "PointCloud"
     pointcloud_obj = make_mesh_obj_etc_for_pointcloud(name)
+
     pointcloud_mesh = pointcloud_obj.data
     # создает bmesh для него чтобы можно было добавлять точки.
     pointcloud_bm = bmesh.new()
@@ -454,10 +466,115 @@ def main():
     check_vertexgroup_verts(pointcloud_obj, 'curve_1')
     check_vertexgroup_verts(pointcloud_obj, 'curve_2')
 
+
+    ##########
+    
+    ########
+
     # очистка памяти от bm
     bm.free()
     pointcloud_bm.free()
+
+####################################
+
+def curve_new(name: str) -> Curve:
+    '''
+    Если кривая с именем таким уже есть - сделать пустым, если нет - создать новый пустой
+    '''
+    if name in bpy.data.curves:
+        curve = bpy.data.curves[name]
+        curve.splines.clear()
+    else:
+        curve = bpy.data.curves.new(name, 'CURVE')
     
+    print("Curve created")
+    return curve
+
+def obj_curve_new(name : str, curve: Curve) -> Object:
+     '''
+     Если объект с именем таким уже есть - перепривязать переданный кривую, если нет - создать новый объект      
+     '''
+     
+     if name in bpy.data.objects:
+         object = bpy.data.objects[name]
+         assert object.type == 'CURVE'
+         object.data = curve
+     else:
+         object = bpy.data.objects.new(name, curve)
+     print("Object created")
+     return object
+
+
+def add_point_to_spline(spline, coords):
+    spline.bezier_points.add(1)
+    point = spline.bezier_points[-1]
+    point.co = coords
+
+# exploring curves
+def main_curves():
+    name = "test_curve"
+    curve = curve_new(name)
+    obj = obj_curve_new(name, curve)
+    
+    # привязка объекта к сцене
+    col_name = "TestCol"
+    #assert col_name in bpy.data.collections
+    col = bpy.data.collections[col_name] #коллекция это папка!
+    ob_to_col(obj, col)
+    
+    curve.splines.new('BEZIER')
+    spline = curve.splines.active
+    add_point_to_spline(spline, (0, 2.0, 0))
+    add_point_to_spline(spline, (1, 3.0, 0))
+    
+  #  print(type(curve))
+    
+    
+    #curve.vertex_add((0, -1.0, 0))
+    
+    #bm = bmesh.from_edit_mesh(mesh_obj.data)
+    
+    
+
+    # очистка памяти от bm
+    #bm.free()
+
+#####################################
+
+def main_uv():
+    obj = bpy.context.active_object
+
+    mesh = obj.data
+    uv_layer = mesh.uv_layers.active
+    
+    #uv_data = uv_layer.data
+    ud_data_uv = uv_layer.uv
+    #print(uv_data)
+    print(ud_data_uv)
+    
+    uv_coords = []
+    
+   # key_uv = uv_data.keys()
+   # print(key_uv)
+   # key_uv_uv = ud_data_uv.keys()
+   # print(key_uv_uv)
+   # items_uv = uv_data.items()
+   # print(items_uv)
+    items_uv_uv = ud_data_uv.items()
+  #  print(items_uv_uv[1][-1])
+   # print(type(items_uv_uv[1][-1]))
+  #  print(items_uv_uv)
+
+    for item in items_uv_uv:
+        uv_coords.append(item[-1].vector)
+    
+
+   # for value in ud_data_uv.values():
+   #     value = uv_data[key]
+   #     uv_coords.append(value.vector)
+   # 
+    print(uv_coords)
+
 if __name__ == "__main__":
     main()
     
