@@ -25,7 +25,14 @@ def is_quad(face: BMFace) -> bool:
     '''
     return (len(face.loops) == 4)
 
-def collect_face_loop(starting_edge: BMEdge) -> List[BMFace]:
+def collect_face_loop(starting_edge: BMEdge) -> (List[BMFace], int):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад/конец меша - меняет направление, попав снова - останавливается
+    Сначала идет только в одном направлении, затем в другую
+    Возвращает список всех граней, вошедших в face loop, и номер грани, с которой начался обход в другую сторону 
+    Если петля зациклена, возвращает -1 (надо соединить последнюю вершину с первой при создании кривой)
+    '''
     faces_in_loop = []
     #обход в одну сторону
     loop = starting_edge.link_loops[0]
@@ -38,20 +45,20 @@ def collect_face_loop(starting_edge: BMEdge) -> List[BMFace]:
 
     faces_in_loop_one_direction, was_cycled_loop = loop_go(loop, False)
     faces_in_loop.extend(faces_in_loop_one_direction)
+    change_direction_face = len(faces_in_loop) - 1
     if (was_cycled_loop):
-        return faces_in_loop
+        return (faces_in_loop, -1)
     #обход в другую сторону, если не было цикла
     loop = starting_edge.link_loops[0].link_loop_next.link_loop_next
     faces_in_loop_two_direction, was_cycled_loop = loop_go(loop, True)
     faces_in_loop.extend(faces_in_loop_two_direction)
-    return faces_in_loop
+    return (faces_in_loop, change_direction_face)
 
 def loop_go(starting_loop: BMLoop, is_second_go: bool) -> (List[BMFace], bool):
     '''
     Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
     Работает только для квадов, попав на не квад - останавливается
-    Сначала идет только в одном направлении
-    Возвращает список всех граней, вошедших в face loop
+    Возвращает список всех граней, вошедших в face loop при обходе в данном направлении
     is_second_go нужен, чтобы при обходе в обратную сторону не добавлять первую грань еще раз в список
     '''
     faces_in_loop = []
@@ -391,10 +398,15 @@ def check_vertexgroup_verts(obj: Object, group_name: str):
 
 # make edges between vertices
 
-def add_vertices_made_in_line(bm: BMesh, vertices: List[Vector]) -> None:
+def add_vertices_made_in_line(bm: BMesh, vertices: List[Vector], idx_change_dir: int) -> None:
     '''
     функция добавляет точки И ребра между ними в bm
-    !!! ожидается писок ПОСЛЕДОВАТЕЛЬНЫХ вершин
+    !!! ожидается cписок ПОСЛЕДОВАТЕЛЬНЫХ вершин от 0 до idx_change_dir включительно, далее от 0-ой до конца!
+    !!! это обусловлено тем, что vertices получены при обходе петли начиная с некоторой грани в одну сторону, а затем от нее же в другую,
+    !!! при этом стартовая грань будет 0-ой в списке.
+    !!! Если idx = -1, то кривая должна быть зациклена, т. е. последняя вершина в списке соединена с 0-ой.
+    TODO: потенциально можно в функции сбора граней сделать сортировку граней. Это упростит понимание и поддержку данной функции
+    но создает необходимость поддерживать лишнюю память для временного несортированного списка граней.
     '''
     if (len(vertices) == 0):
         print("Attempt to make stroke-mesh from empty vertices list.")
@@ -402,11 +414,27 @@ def add_vertices_made_in_line(bm: BMesh, vertices: List[Vector]) -> None:
     idx_start_vert = len(bm.verts)
     idx_start_edge = len(bm.edges)
     bm_verts_new = []
+    # добавление вершин
     for v in vertices:
         new_vert = bm.verts.new(v)
         bm_verts_new.append(new_vert)
-    for i in range(0, len(bm_verts_new) - 1):
-        bm.edges.new((bm_verts_new[i], bm_verts_new[i + 1]))
+
+    # создание зацикленной кривой
+    if (idx_change_dir == -1):
+        for i in range(0, len(bm_verts_new) - 1):
+            bm.edges.new((bm_verts_new[i], bm_verts_new[i + 1]))
+        bm.edges.new((bm_verts_new[0], bm_verts_new[-1]))
+    else:
+        # добавление последовательных ребер в первом направлении
+        for i in range(0, idx_change_dir):
+            bm.edges.new((bm_verts_new[i], bm_verts_new[i + 1]))
+        # добавление последовательных ребер в обратном направлении
+        v_start = bm_verts_new[0] # вершина с грани, с которой начинался обход петли
+        for i in range(idx_change_dir + 1, len(bm_verts_new)):
+            bm.edges.new((v_start, bm_verts_new[i]))
+            v_start = bm_verts_new[i]
+
+    # обновление индексов вершин и ребер [так сказано в документации]
     bm.verts.ensure_lookup_table()
     bm.edges.ensure_lookup_table()
     for i in range(idx_start_vert, idx_start_vert + len(vertices)):
@@ -628,21 +656,23 @@ def main():
     #for e in pointcloud_bm.edges:
     #    print(e)
         
-    #faces_in_loop = go_through_loop(starting_edge)
-    faces_in_loop = collect_face_loop(starting_edge)
-    print(faces_in_loop)
+    (faces_in_loop, change_direction_face) = collect_face_loop(starting_edge)
+    
+    print(change_direction_face)
+    
+    #print(faces_in_loop)
     for face in faces_in_loop:
         face.select = True
     #make_point_cloud(pointcloud_bm, pointcloud_obj, faces_in_loop, 1)
     vertices = []
     for face in faces_in_loop:
         vertices.append(face.calc_center_median())
-    add_vertices_made_in_line(pointcloud_bm, vertices)
+    add_vertices_made_in_line(pointcloud_bm, vertices, change_direction_face)
 
-    #for v in pointcloud_bm.verts:
-    #    print(v)
-    #for e in pointcloud_bm.edges:
-    #    print(e)
+    for v in pointcloud_bm.verts:
+        print(v)
+    for e in pointcloud_bm.edges:
+        print(e)
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
