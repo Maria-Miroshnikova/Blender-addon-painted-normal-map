@@ -398,6 +398,10 @@ def check_vertexgroup_verts(obj: Object, group_name: str):
 
 # make edges between vertices
 
+# TODO: необходимо новый штрих, имеющий точки, уже входящие в меш, СДВИГАТЬ, чтобы это был отдельный объект!!
+# достаточно делать это по z, когда работаем уже в uv координатах над плоскостью.
+# сделать этот сдвиг всех добавляемых точек на delta z потом!
+# TODO: второй вариант: оформлять каждый штрих в отдельный объект с точками в тех же местах (возможно ли? дорого по памяти?)
 def add_vertices_made_in_line(bm: BMesh, vertices: List[Vector], idx_change_dir: int) -> None:
     '''
     функция добавляет точки И ребра между ними в bm
@@ -657,29 +661,34 @@ def main():
     #    print(e)
         
     (faces_in_loop, change_direction_face) = collect_face_loop(starting_edge)
-    
-    print(change_direction_face)
-    
+    #print(change_direction_face)
     #print(faces_in_loop)
+
     for face in faces_in_loop:
         face.select = True
-    #make_point_cloud(pointcloud_bm, pointcloud_obj, faces_in_loop, 1)
     vertices = []
     for face in faces_in_loop:
         vertices.append(face.calc_center_median())
     add_vertices_made_in_line(pointcloud_bm, vertices, change_direction_face)
 
-    for v in pointcloud_bm.verts:
-        print(v)
-    for e in pointcloud_bm.edges:
-        print(e)
+ #   for v in pointcloud_bm.verts:
+ #       print(v)
+ #   for e in pointcloud_bm.edges:
+ #       print(e)
+
+    (faces_in_loop, change_direction_face) = collect_face_loop(bm.edges[10])
+    for face in faces_in_loop:
+        face.select = True
+    vertices = []
+    for face in faces_in_loop:
+        vertices.append(face.calc_center_median())
+    add_vertices_made_in_line(pointcloud_bm, vertices, change_direction_face)
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
     # обновление point cloud на экране
     pointcloud_bm.to_mesh(pointcloud_mesh)
     pointcloud_obj.data.update()
-
 
     ##########
     
@@ -688,6 +697,19 @@ def main():
     # очистка памяти от bm
     bm.free()
     pointcloud_bm.free()
+    
+    # Конвертирование в кривую и установка типа "poly curve"
+    # !!!!!!!! контекстозависимая часть!!
+    # TODO: пока не нашла, как сделать независимой (bmesh, mesh, object, object.data не имеют функции convert)
+    # но в идеале - довести до независомого! МБ оформление в оператор как-то поможет.
+    bpy.ops.object.editmode_toggle()
+    bpy.context.view_layer.update()
+    pointcloud_obj.select_set(True)
+    bpy.context.view_layer.objects.active = pointcloud_obj
+
+    bpy.ops.object.convert(target='CURVE')
+    bpy.ops.object.editmode_toggle()
+    bpy.ops.curve.spline_type_set(type='POLY')
 
 if __name__ == "__main__":
     main()
