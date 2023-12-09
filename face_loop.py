@@ -389,12 +389,30 @@ def check_vertexgroup_verts(obj: Object, group_name: str):
     
 ################################
 
-# как создать кривую?
-# как добавить ребро в кривую?
+# make edges between vertices
 
-def make_curve_from_vertices():
-    bpy.data.curves.new()
-    pass
+def add_vertices_made_in_line(bm: BMesh, vertices: List[Vector]) -> None:
+    '''
+    функция добавляет точки И ребра между ними в bm
+    !!! ожидается писок ПОСЛЕДОВАТЕЛЬНЫХ вершин
+    '''
+    if (len(vertices) == 0):
+        print("Attempt to make stroke-mesh from empty vertices list.")
+        return
+    idx_start_vert = len(bm.verts)
+    idx_start_edge = len(bm.edges)
+    bm_verts_new = []
+    for v in vertices:
+        new_vert = bm.verts.new(v)
+        bm_verts_new.append(new_vert)
+    for i in range(0, len(bm_verts_new) - 1):
+        bm.edges.new((bm_verts_new[i], bm_verts_new[i + 1]))
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    for i in range(idx_start_vert, idx_start_vert + len(vertices)):
+        bm.verts[i].index = i
+    for i in range(idx_start_edge, idx_start_edge + len(vertices) - 1):
+        bm.edges[i].index = i
 
 
 
@@ -541,6 +559,7 @@ def main_curves():
 
 #####################################
 
+# exploring uv
 def main_uv():
     obj = bpy.context.active_object
 
@@ -575,9 +594,74 @@ def main_uv():
    # 
     print(uv_coords)
 
+##################################################
+
+def main():
+    
+    mesh_obj = bpy.context.active_object
+    
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+    
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущее облако точек.
+    name = "StrokesMesh"
+    pointcloud_obj = make_mesh_obj_etc_for_pointcloud(name)
+
+    pointcloud_mesh = pointcloud_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    pointcloud_bm = bmesh.new()
+    pointcloud_bm.from_mesh(pointcloud_mesh)
+
+    # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
+    # TODO: переделать на face?
+    selected_edges = [edge for edge in bm.edges if edge.select]
+    
+    if not selected_edges:
+        starting_edge = bm.edges[0]
+    else:
+        starting_edge = selected_edges[0]
+        
+    # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!        
+    
+    #for v in pointcloud_bm.verts:
+    #    print(v)
+    #for e in pointcloud_bm.edges:
+    #    print(e)
+        
+    #faces_in_loop = go_through_loop(starting_edge)
+    faces_in_loop = collect_face_loop(starting_edge)
+    print(faces_in_loop)
+    for face in faces_in_loop:
+        face.select = True
+    #make_point_cloud(pointcloud_bm, pointcloud_obj, faces_in_loop, 1)
+    vertices = []
+    for face in faces_in_loop:
+        vertices.append(face.calc_center_median())
+    add_vertices_made_in_line(pointcloud_bm, vertices)
+
+    #for v in pointcloud_bm.verts:
+    #    print(v)
+    #for e in pointcloud_bm.edges:
+    #    print(e)
+
+    # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # обновление point cloud на экране
+    pointcloud_bm.to_mesh(pointcloud_mesh)
+    pointcloud_obj.data.update()
+
+
+    ##########
+    
+    ########
+
+    # очистка памяти от bm
+    bm.free()
+    pointcloud_bm.free()
+
 if __name__ == "__main__":
     main()
     
 # для дебага из vscode....
 # может ломать результат в blender    
-main()
+#main()
