@@ -591,8 +591,52 @@ def main_curves():
 
 #####################################
 
+#TODO: add_vertices_made_in_line со сдвигом по z
+def get_uv_of_mesh_face_center(face: BMFace, uv_layer) -> Vector:
+    '''
+    функция для данной грани(не в UV) ищет координаты ее центра уже в UV
+    возвращает 2D вектор
+    Соотносится с ой UVMap, которая получается с помощью GeoNodes (развертка).
+    TODO: будет ли соотноситься с холстом, который создается GeoNodes curve painter?
+    '''
+    loops = face.loops
+    sum_1 = sum_2 = 0
+    print("Layer: ", uv_layer.uv.items())
+    for loop in loops:
+        print("loop: s", loop)
+        # !!!!TODO: не работает, если сделать Unwrap на объекте, почему-то пропадают items в uv слоя....
+        uv_data = uv_layer.uv[loop.index]
+        print(type(uv_data))
+        uv = uv_data.vector
+        print(type(uv), uv[0], uv[1])
+        sum_1 += uv[0]
+        sum_2 += uv[1]
+    return Vector([sum_1 / len(loops), sum_2 / len(loops)])
+
+def get_uv_vertices(faces: List[BMFace], mesh: Mesh) -> List[Vector]:
+    '''
+    функция отображает каждую грань в UV и находит там её центр
+    возвращает координаты всех центров в UV
+    TODO: уязвимое место, перестает работать если сделать Unwrap
+    '''
+
+    # TODO: в каких случаях его может не быть?
+    # !!!!TODO: не работает, если сделать Unwrap на объекте, почему-то пропадают items в uv слоя....
+    # !!!!TODO: вообще-то uv хранится и в слоях bmesh, там надо будет что-то типа как с группами точек делать.
+    # !!! мб это как раз лечится тем, чтобы работать с bmesh?
+    uv_layer = mesh.uv_layers.active
+
+  #  print("Mesh uv layers: ", mesh.uv_layers)
+  #  print("Mesh uv layers: ", mesh.uv_layers.active)
+
+    vertices = []
+    for face in faces:
+        vertices.append(get_uv_of_mesh_face_center(face, uv_layer))
+    return vertices
+
 # exploring uv
-def main_uv():
+#def main_uv():
+def main():
     obj = bpy.context.active_object
 
     mesh = obj.data
@@ -605,12 +649,6 @@ def main_uv():
     
     uv_coords = []
     
-   # key_uv = uv_data.keys()
-   # print(key_uv)
-   # key_uv_uv = ud_data_uv.keys()
-   # print(key_uv_uv)
-   # items_uv = uv_data.items()
-   # print(items_uv)
     items_uv_uv = ud_data_uv.items()
   #  print(items_uv_uv[1][-1])
    # print(type(items_uv_uv[1][-1]))
@@ -620,15 +658,34 @@ def main_uv():
         uv_coords.append(item[-1].vector)
     
 
-   # for value in ud_data_uv.values():
-   #     value = uv_data[key]
-   #     uv_coords.append(value.vector)
-   # 
-    print(uv_coords)
+
+    print(uv_coords[0:2])
+    
+    faces = []
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+
+
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущее облако точек.
+    name = "UVProjection"
+    pointcloud_obj = make_mesh_obj_etc_for_pointcloud(name)
+
+    pointcloud_mesh = pointcloud_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    pointcloud_bm = bmesh.new()
+    pointcloud_bm.from_mesh(pointcloud_mesh)
+
+    vertices = get_uv_vertices(bm.faces, mesh)
+    add_verts_to_point_cloud(pointcloud_bm, [Vector([v[0], v[1], 0]) for v in vertices])
+    # обновление point cloud на экране
+    pointcloud_bm.to_mesh(pointcloud_mesh)
+    pointcloud_obj.data.update()
+    pointcloud_bm.free()  
 
 ##################################################
 
-def main():
+def main_():
     
     mesh_obj = bpy.context.active_object
     
@@ -716,4 +773,4 @@ if __name__ == "__main__":
     
 # для дебага из vscode....
 # может ломать результат в blender    
-#main()
+main()
