@@ -339,7 +339,7 @@ def process_faces_from_loop_em(faces: List[BMFace], idx_change_dir: int, delta_z
     # строим цепь из центров, соединенных ребрами
     add_vertices_made_in_line_with_delta_z(strokes_bm, uv_centers_of_loop_faces, idx_change_dir, delta_z) 
 
-def convert_mesh_to_curve_and_make_poly(strokes_obj: Object):
+def convert_mesh_to_curve_and_make_poly(strokes_obj: Object, mesh_obj: Object):
     '''
     Конвертирование в кривую и установка типа "poly curve"
     '''
@@ -349,6 +349,7 @@ def convert_mesh_to_curve_and_make_poly(strokes_obj: Object):
 
     #--- OBJECT MODE
     strokes_obj.select_set(True)
+    mesh_obj.select_set(False)
     bpy.context.view_layer.objects.active = strokes_obj
 
     bpy.ops.object.convert(target='CURVE')
@@ -408,11 +409,11 @@ def main():
     strokes_bm.free()
 
     #--- EDIT MODE
- #   bpy.ops.object.editmode_toggle()
- #   bpy.context.view_layer.update()
+    bpy.ops.object.editmode_toggle()
+    bpy.context.view_layer.update()
     
- #   # Конвертирование накопителя строк в кривую
- #   convert_mesh_to_curve_and_make_poly(strokes_obj)    
+    # Конвертирование накопителя строк в кривую
+    convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)    
 
 if __name__ == "__main__":
     main()
