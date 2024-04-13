@@ -113,6 +113,45 @@ def make_point_cloud(bm: BMesh, obj: Object, faces: List[BMFace], iteration: int
    # check_vertexgroup_verts(obj, group_name)
 
 ################################
+# функции для обхода лупы (сбор перпендикулярных ей) в двух ориентациях. Не нужна, т к есть функция обхода лупы по ребру, которое однозначно
+# определяет направление
+
+# если определять начало через ребро а не через кваду, то ориентация будет однозначной.
+# мб эта функция потом понадобится для автозаполнения, но начнем не с нее.
+# каждый face может принадлежать 2 лупам, но каждое ребро принадлежит только 1 кольцу
+# стоит ли передавать множество не самих bmface а только их id? TODO
+# set будет передаваться по ссылке или нет? TODO
+def loops_for_loop(start_quad: BMFace, is_horisontal: bool, visited_faces: Set[BMFace], obj: Object, mesh: Mesh) -> None:
+    '''
+    идти вдоль лупы, содержащей данную quad вдоль заданного направления и собирать все принадлежащие ей
+    перпендикулярные лупы
+    '''
+    
+    # уже знаем, что грань квадратная
+    # или нам это не надо,тк заложено в функцию обхода лупы? TODO!
+    edge = start_quad.edges[0]
+    loop = edge.link_loops[0]
+    if (is_horisontal):
+        edge = loop.link_loop_next.edge
+        #loop = edge.link_loops[0]
+    #else:
+        #loop = start_quad.loops[1]
+
+    faces_in_loop, edge_ring = collect_face_loop(edge)
+    for idx, e in enumerate(edge_ring):
+        loop = e.link_loops[0]
+        # не будет ли тут путаницы?
+        start_edge = loop.link_loop_next.edge
+        faces_in_loop_inner, edge_ring_inner = collect_face_loop(start_edge)
+        make_point_cloud(mesh, obj, faces_in_loop_inner, idx)
+
+def loops_for_loop_both_orientations(start_quad: BMFace, visited_faces: Set[BMFace], obj: Object, mesh: Mesh):
+    loops_for_loop(start_quad, True, visited_faces, obj, mesh)
+    loops_for_loop(start_quad, False, visited_faces, obj, mesh)
+    pass
+
+#################################
+
 
 def grouping_layers(bm: BMesh, id_start: int, id_end: int, group_id: int) -> None :
     '''
