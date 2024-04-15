@@ -12,6 +12,8 @@ from bpy.types import Mesh, Object, Collection
 from mathutils import Vector
 from typing import List, Set, Tuple
 
+import random
+
 ##############################################
 # функции обхода loop
 # не работают на объектах, где лупа не зациклена и не обрамлена не квадами
@@ -375,6 +377,42 @@ def collect_face_loop_with_recording_visited_not_quads_nocross(starting_edge: BM
     visited_not_quads.extend(visited_not_quads_two)
     return (faces_in_loop, loops, change_direction_face, visited_not_quads)
 
+# Версия функции collect_face_loop_with_recording_visited_not_quads_concrete_loop
+# принимает на вход конкретную лупу, т. к. в той версии при получении ребра можно было оказаться не на той грани, на которой задумано
+# останавливает сбор если встречает посещенную грань
+# может вернуть недействительный change_direction_face, если обход вызван из обойденной грани
+# 
+def collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loop_start: BMLoop, visited_faces_id: Set[int]) -> (List[BMFace], List[BMLoop], int, List[BMFace]):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад/конец меша - меняет направление, попав снова - останавливается
+    Сначала идет только в одном направлении, затем в другую
+    Возвращает список всех граней, вошедших в face loop, и номер грани, с которой начался обход в другую сторону 
+    Если петля зациклена, возвращает -1 (надо соединить последнюю вершину с первой при создании кривой)
+    visited_faces_id - уже известные до вызова этой функции грани, посещенные на других обходах
+    '''
+    visited_not_quads = []
+    faces_in_loop = []
+    loops = []
+    #обход в одну сторону
+    loop = loop_start
+
+    faces_in_loop_one_direction, loops_one_direction, was_cycled_loop, visited_not_quads_one = loop_go_with_recording_visited_not_quads_nocross(loop, False, visited_faces_id)
+    faces_in_loop.extend(faces_in_loop_one_direction)
+    loops.extend(loops_one_direction)
+    visited_not_quads.extend(visited_not_quads_one)
+    change_direction_face = len(faces_in_loop) - 1
+    if (was_cycled_loop):
+        return (faces_in_loop, loops, -1, visited_not_quads)
+    #обход в другую сторону, если не было цикла
+    loop = loop_start.link_loop_next.link_loop_next
+    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id)
+    faces_in_loop.extend(faces_in_loop_two_direction)
+    loops.extend(loops_two_direction)
+    visited_not_quads.extend(visited_not_quads_two)
+    return (faces_in_loop, loops, change_direction_face, visited_not_quads)
+
+
 ##################################
 # функции создания нового пустого объекта с пустым мешем без вертекс групп
 
@@ -459,6 +497,8 @@ def make_new_obj_with_empty_mesh_with_unique_name_in_scene(mesh_name: str) -> Ob
     print("Empty obj-mesh-etc created")
     return obj
 
+
+
 ################################
 
 
@@ -511,13 +551,57 @@ def loops_for_loop_by_edge_nocross(start_edge: BMEdge, visited_faces_id: Set[int
         visited_faces_id.add(notquad.index)
     # обходим перпендикулярные
     for loop in edge_ring:
+
         # выбор перпендикулярного ребра
-        edge = loop.link_loop_next.edge
-        faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross(edge, visited_faces_id)
+        #edge = loop.link_loop_next.edge
+        #faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross(edge, visited_faces_id)
+        loop_start = loop.link_loop_next
+        faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loop_start, visited_faces_id)
+       
         for face in faces_in_loop_inner:
             visited_faces_id.add(face.index)
         for notquad in visited_not_quads_inner:
             visited_faces_id.add(notquad.index)
+        result.append((faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner))
+    
+    return result
+
+# версия loops_for_loop_by_edge, в которой обход петли останавливается при встрече с обойденной петлей
+# и всегда вызывает обход не по ребру, а по конкретной лупе!
+# важно для авто-обхода
+def loops_for_loop_by_edge_nocross_concrete_loop(start_loop: BMLoop, visited_faces_id: Set[int]) -> List[Tuple[List[BMFace], List[BMLoop], int]]:
+    '''
+    идти вдоль лупы, содержащей данную start_edge и собирает все принадлежащие ей
+    перпендикулярные лупы
+    изменяет множество visited_faces_id
+    TODO: сразу же обрабатывать лупу или возвращать всё накопленное?
+    '''
+    
+#    loop = start_edge.link_loops[0]
+    result = []
+
+    # прошли по стартовой петле
+    faces_in_loop, edge_ring, idx_change_dir, visited_not_quads = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(start_loop, visited_faces_id)
+    
+    # запись не квадов в посещенные
+    #for notquad in visited_not_quads:
+    #    visited_faces_id.add(notquad.index)
+    
+    # обходим перпендикулярные
+    for loop in edge_ring:
+
+        # выбор перпендикулярного ребра
+        #edge = loop.link_loop_next.edge
+        #faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross(edge, visited_faces_id)
+        loop_start = loop.link_loop_next
+        faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loop_start, visited_faces_id)
+       
+        for face in faces_in_loop_inner:
+            visited_faces_id.add(face.index)
+        # запись не квадов в посещенные
+        #for notquad in visited_not_quads_inner:
+        #    visited_faces_id.add(notquad.index)
+
         result.append((faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner))
     
     return result
@@ -762,9 +846,118 @@ def convert_mesh_to_curve_and_make_poly(strokes_obj: Object, mesh_obj: Object):
     bpy.ops.object.editmode_toggle()
     bpy.ops.curve.spline_type_set(type='POLY')
 
+def strokes_nocross(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set):
+    '''
+    Фнукция вызывает один сбор перпендикулярных ребер + построение отдельного strokemesh по собранным петлям
+    Также производит очистку памяти и обновление strokemesh на экране
+    !! Изменяет значение z_coord и index
+    Возвращает индексы всех посещенных граней-квад
 
-#def main_process():
+    name - базовое имя всех strokemesh
+    index - номер меша
+    z_coord - сдвиг по z для направляющих в strokemesh
+    startloop - с какой лупы начинается обход
+    bm - модель, для которой строится strokemesh
+    '''
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index))
+    index += 1
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
 
+    # запуск от заданного ребра
+    # TODO: здесь лупа для обхода выбирается случайно из 2 луп данного ребра!
+    result = loops_for_loop_by_edge_nocross_concrete_loop(start_loop, visited_faces_id)
+    for idx, item in enumerate(result):
+        (faces_in_loop, loops, change_direction_face) = item
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0.1*z_coord, bm, strokes_bm, loops)
+        z_coord += 1
+    #for id in visited_faces_id:
+    #    bm.faces[id].select = True
+
+    # TODO: это для дебага в основном
+    for id in visited_faces_id:
+        bm.faces[id].select = True
+
+    # очистка памяти и обновление StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+    strokes_bm.free()
+
+    return visited_faces_id, index, z_coord
+
+def choose_loop(not_visited_face_id: List[int], bm: BMesh):
+    '''
+    Функция выбора следующей стартовой лупы для автозаполнения
+    Выбор из непосещенных граней
+    Выбирается случайная грань и ее первая лупа в списке
+    TODO: выбор ориентации по какому-то признаку
+    '''
+
+    #random_face_id = random.choice(not_visited_face_id)
+    random_face_id = list(not_visited_face_id)[0]
+    # TODO выбор ориентации по какому-то признаку?
+    loop = bm.faces[random_face_id].loops[0]
+    #edge = bm.faces[random_face_id].edges[0]
+    return loop
+
+
+def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
+    '''
+    Функция для построения направляющих по всему мешу
+    Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
+    Запускает сбор перпендикулярных петель, пока не обойдет все вершины (учитываются только квады)
+    '''
+    
+    # все грани меша = непосещенные
+    not_visited_face_id = set() #set([face.index for face in bm.faces])
+    # выкинуть не квады
+    for face in bm.faces:
+        if is_quad(face):
+            not_visited_face_id.add(face.index)
+
+    count_not_visited_start = len(not_visited_face_id)
+
+    index = 0
+    z_coord = 0
+    name = "StrokesMesh_"
+    visited_faces_id = set()
+
+
+    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+    print("not_visited_id: " + str(not_visited_face_id))
+
+
+    (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, start_edge.link_loops[0], bm, visited_faces_id)
+    not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+    print("not_visited_id: " + str(not_visited_face_id))
+
+
+    # пока непосещенные не пусты:
+    while len(not_visited_face_id) > 0:
+    # выбрать из непосещенных граней одну, взять конкретную лупу / попросить ввести (?)
+        loop_next = choose_loop(not_visited_face_id, bm)
+    # запустить обход из нее
+    # построить в отдельный strokemesh нужные вершины и цепь
+        (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, loop_next, bm, visited_faces_id)
+    # обновить множество непосещенных граней
+        not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+
+        print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+        print("not_visited_id: " + str(not_visited_face_id))
+
+    # TODO
+    # все stroke_obj надо будет потом превратить в кривые, но это либо уже после всего обхода,
+    # либо на пошаговом вводе можно будет сделать эту операцию после каждого обхода                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+
+    return index, name
 
 def output_not_visited_faces(bmesh, visited_faces_id):
     '''
@@ -777,6 +970,58 @@ def output_not_visited_faces(bmesh, visited_faces_id):
     print("Visited faces: " + str(len(visited_faces_id)) + "/" + str(len(bmesh.faces)))
     print("Not visited faces: " + str(len(not_visited)) + " " + str(not_visited))
 
+def convert_to_curve_all_strokemesh(name: str, count: int, mesh_obj: Object):
+    #--- EDIT MODE TO OBJECT MODE
+    bpy.ops.object.editmode_toggle()
+    bpy.context.view_layer.update()
+    
+    current_obj = mesh_obj
+
+    for index in range(0, count):
+        # получить stroke obj по имени
+        stroke_obj_next = bpy.data.objects[name + str(index)]
+        # Конвертирование накопителя строк в кривую
+        convert_mesh_to_curve_and_make_poly(stroke_obj_next, current_obj)
+        # переключение на OBJECT MODE
+        bpy.ops.object.editmode_toggle()
+        bpy.context.view_layer.update()
+        current_obj = stroke_obj_next
+
+
+def main_1():
+    #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
+    # TODO: переделать на face?
+    selected_edges = [edge for edge in bm.edges if edge.select]
+    
+    if not selected_edges:
+        starting_edge = bm.edges[0]
+#        next_edge = bm.edges[10]
+    else:
+        starting_edge = selected_edges[0]
+#        next_edge = selected_edges[1]
+        
+    # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!  
+
+    # автозаполнение базовое
+    count, name = auto_strokes_nocross(bm, starting_edge) 
+
+     # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # очистка памяти от bm
+    bm.free()
+
+    convert_to_curve_all_strokemesh(name, count, mesh_obj)
+
+        #--- EDIT MODE
+ #   bpy.ops.object.editmode_toggle()
+ #   bpy.context.view_layer.update()
+    
+    # Конвертирование накопителя строк в кривую
+ #   convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)   
 
 def main():
     
@@ -805,21 +1050,24 @@ def main():
 #        next_edge = selected_edges[1]
         
     # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!        
-        
+####################################
     # просто обход 1 лупы без сбора перпендикулярных
+
 #    (faces_in_loop, loops, change_direction_face) = collect_face_loop(starting_edge)
 #    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0, bm, strokes_bm, loops)
 
 #    (faces_in_loop, loops, change_direction_face) = collect_face_loop(next_edge)
 #    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0.1, bm, strokes_bm, loops)
 
+#######################################
+
     # обход 1 лупы со сбором перпендикулярных
     visited_faces_id = set()
 
     # обычный обход
-    result = loops_for_loop_by_edge(starting_edge, visited_faces_id)
+    #result = loops_for_loop_by_edge(starting_edge, visited_faces_id)
     # обход с остановкой на посещенных гранях
-    #result = loops_for_loop_by_edge_nocross(starting_edge, visited_faces_id)
+    result = loops_for_loop_by_edge_nocross(starting_edge, visited_faces_id)
     for idx, item in enumerate(result):
         (faces_in_loop, loops, change_direction_face) = item
         process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0.1*idx, bm, strokes_bm, loops)
