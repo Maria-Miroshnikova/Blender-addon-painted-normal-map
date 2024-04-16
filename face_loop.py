@@ -243,7 +243,7 @@ def loop_go_with_recording_visited_not_quads(starting_loop: BMLoop, is_second_go
 # останавливает сбор если встречает посещенную грань
 # TODO: по идее, проблем с цикличьностью и проверкой на посещенность не будет, ведь сверяем посещенность по visited_faces_id, а туда посещенные вершины записываются
 # во внешней функции, а не тут же
-def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_second_go: bool, visited_faces_id: Set[int]) -> (List[BMFace], List[BMLoop], bool, List[BMFace]):
+def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_second_go: bool, visited_faces_id: Set[int], faces_first_go_id: Set[int] = []) -> (List[BMFace], List[BMLoop], bool, List[BMFace]):
     '''
     Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
     Работает только для квадов, попав на не квад - останавливается
@@ -251,12 +251,13 @@ def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_s
     is_second_go нужен, чтобы при обходе в обратную сторону не добавлять первую грань еще раз в список
     bool в возврате - это флаг того, цикличная дання петля или нет (то есть вернемся ли мы при обходе петли в ту грань, с которой обход начался)
     visited_faces_id - уже известные до вызова этой функции грани, посещенные на других обходах
+    faces_first_go_id - посещенные на обходе в другую сторону грани, которые еще не занесли в глобальные посещенные грани visited_faces_id
     '''
     visited_not_quads = []
     faces_in_loop = []
+    faces_in_loop_id = set() # нужно для отслеживание самопересечений во время ЭТОГО обхода
     loops = []
     loop = starting_loop
-    #loop.edge.select = True
     
     if (not is_quad(loop.face)):
         if (not is_second_go):
@@ -265,9 +266,10 @@ def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_s
     # если это первый проход:
     if (not is_second_go):
         # если стартовая грань уже посещена - закончить обход
-        if (loop.face.index in visited_faces_id):
+        if (loop.face.index in visited_faces_id) or (loop.face.index in faces_first_go_id):
             return [], [], False, visited_not_quads
         faces_in_loop.append(loop.face)
+        faces_in_loop_id.add(loop.face.index)
         loops.append(loop)
     
     radial_loop = loop.link_loop_radial_next
@@ -288,16 +290,17 @@ def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_s
         return faces_in_loop, loops, False, visited_not_quads
     else:
         # если следующая грань уже посещена - закончить обход
-        if (radial_loop.face.index in visited_faces_id):
+        # (посещена при обходе других петель / при обходе в другую сторону / при обходе в эту же строну)
+        if (radial_loop.face.index in visited_faces_id) or (radial_loop.face.index in faces_first_go_id) or (radial_loop.face.index in faces_in_loop_id):
             return faces_in_loop, loops, False, visited_not_quads
         # следующая грань не посещена, добавляем ее в инфу
         faces_in_loop.append(radial_loop.face)
+        faces_in_loop_id.add(radial_loop.face.index)
         if (is_second_go):
             loops.append(radial_loop)
         else:
             loops.append(radial_loop.link_loop_next.link_loop_next)
     next_loop = radial_loop.link_loop_next.link_loop_next
-#    next_loop.edge.select = True
     
     # цикл прыжков для сбора всей лупы пока не упремся в не кваду или не вернемся в начальную (замкнутая лупа)
     # или не закончится плоский меш
@@ -326,15 +329,16 @@ def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_s
         
         # проверяем, следующая грань это квада? 
         is_next_face_quad = is_quad(radial_loop.face)
-        # next_face_orto_loop.face.select = is_quad(next_face_orto_loop.face)
         if (not is_next_face_quad):
             visited_not_quads.append(radial_loop.face)
             return faces_in_loop, loops, False, visited_not_quads
         else:
              # если следующая грань уже посещена - закончить обход
-            if (radial_loop.face.index in visited_faces_id):
+             # (посещена при обходе других петель / при обходе в другую сторону / при обходе в эту же строну)
+            if (radial_loop.face.index in visited_faces_id) or (radial_loop.face.index in faces_first_go_id) or (radial_loop.face.index in faces_in_loop_id):
                 return faces_in_loop, loops, False, visited_not_quads
             faces_in_loop.append(radial_loop.face)
+            faces_in_loop_id.add(radial_loop.face.index)
             if (is_second_go):
                 loops.append(radial_loop)
             else:
@@ -371,13 +375,13 @@ def collect_face_loop_with_recording_visited_not_quads_nocross(starting_edge: BM
         return (faces_in_loop, loops, -1, visited_not_quads)
     #обход в другую сторону, если не было цикла
     loop = starting_edge.link_loops[0].link_loop_next.link_loop_next
-    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id)
+    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id, set([face.index for face in faces_in_loop_one_direction]))
     faces_in_loop.extend(faces_in_loop_two_direction)
     loops.extend(loops_two_direction)
     visited_not_quads.extend(visited_not_quads_two)
     return (faces_in_loop, loops, change_direction_face, visited_not_quads)
 
-# Версия функции collect_face_loop_with_recording_visited_not_quads_concrete_loop
+# Версия функции collect_face_loop_with_recording_visited_not_quads_nocross
 # принимает на вход конкретную лупу, т. к. в той версии при получении ребра можно было оказаться не на той грани, на которой задумано
 # останавливает сбор если встречает посещенную грань
 # может вернуть недействительный change_direction_face, если обход вызван из обойденной грани
@@ -406,7 +410,7 @@ def collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loo
         return (faces_in_loop, loops, -1, visited_not_quads)
     #обход в другую сторону, если не было цикла
     loop = loop_start.link_loop_next.link_loop_next
-    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id)
+    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id, set([face.index for face in faces_in_loop_one_direction]))
     faces_in_loop.extend(faces_in_loop_two_direction)
     loops.extend(loops_two_direction)
     visited_not_quads.extend(visited_not_quads_two)
@@ -987,8 +991,8 @@ def convert_to_curve_all_strokemesh(name: str, count: int, mesh_obj: Object):
         bpy.context.view_layer.update()
         current_obj = stroke_obj_next
 
-
-def main_1():
+# вызов автозаполнения nocross
+def test_auto_strokes_nocross():
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
@@ -1023,7 +1027,69 @@ def main_1():
     # Конвертирование накопителя строк в кривую
  #   convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)   
 
-def main():
+# вызов обхода одной петли без сбора перпендикуляров, nocross
+def test_collect_loop_nocross():
+     #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+    
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    name = "StrokesMesh"
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name)
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
+
+    # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
+    # TODO: переделать на face?
+    selected_edges = [edge for edge in bm.edges if edge.select]
+    
+    if not selected_edges:
+        starting_edge = bm.edges[0]
+#        next_edge = bm.edges[10]
+    else:
+        starting_edge = selected_edges[0]
+#        next_edge = selected_edges[1]
+        
+    # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!        
+####################################
+    # просто обход 1 лупы без сбора перпендикулярных
+
+#    (faces_in_loop, loops, change_direction_face) = collect_face_loop(starting_edge)
+#    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0, bm, strokes_bm, loops)
+
+#    (faces_in_loop, loops, change_direction_face) = collect_face_loop(next_edge)
+#    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0.1, bm, strokes_bm, loops)
+
+#######################################
+
+    # обход 1 лупы со сбором перпендикулярных
+    visited_faces_id = set()
+
+    # обычный обход
+    #result = loops_for_loop_by_edge(starting_edge, visited_faces_id)
+    # обход с остановкой на посещенных гранях
+    (faces_in_loop, edge_ring, idx_change_dir, visited_not_quads) = collect_face_loop_with_recording_visited_not_quads_nocross(starting_edge, visited_faces_id)
+    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, idx_change_dir, 0.1, bm, strokes_bm, edge_ring)
+    for id in visited_faces_id:
+        bm.faces[id].select = True
+
+    output_not_visited_faces(bm, visited_faces_id)
+
+    # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+
+    # очистка памяти от bm
+    bm.free()
+    strokes_bm.free()
+
+# вызов одного обхода со сбором перпендикуляров, без автозаполнения
+def test_loops_for_loop_nocross():
     
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
@@ -1092,6 +1158,14 @@ def main():
     
     # Конвертирование накопителя строк в кривую
   #  convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)    
+
+def main():
+    # одна петля без перпендикуляров
+    #test_collect_loop_nocross()
+    # перпендикуляры
+    #test_loops_for_loop_nocross()
+    # автозаполнение
+    test_auto_strokes_nocross()
 
 if __name__ == "__main__":
     main()
