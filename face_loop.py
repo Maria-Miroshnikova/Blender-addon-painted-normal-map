@@ -471,7 +471,7 @@ def ob_to_col(obj: Object, col: Collection) -> None:
 
 # достать из Object его mesh почему-то достаточно obj.data. Почему?
 # если ошибаюсь, то нужно все же возвращать mesh, obj
-def make_new_obj_with_empty_mesh_with_unique_name_in_scene(mesh_name: str) -> Object:
+def make_new_obj_with_empty_mesh_with_unique_name_in_scene(mesh_name: str, col_name_with_idx: str) -> Object:
     '''
     Функция, которая создает правильный объект с данным именем, удаляя из сцены дубли
     '''
@@ -482,7 +482,7 @@ def make_new_obj_with_empty_mesh_with_unique_name_in_scene(mesh_name: str) -> Ob
     obj = obj_new(mesh_name, mesh)
      
     # привязка объекта к сцене
-    col_name = "TestCol"
+    col_name = col_name_with_idx #"TestCol"
     #assert col_name in bpy.data.collections
 
     ### проверка существования папки и ее создание, если ее нет
@@ -850,7 +850,7 @@ def convert_mesh_to_curve_and_make_poly(strokes_obj: Object, mesh_obj: Object):
     bpy.ops.object.editmode_toggle()
     bpy.ops.curve.spline_type_set(type='POLY')
 
-def strokes_nocross(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set):
+def strokes_nocross(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str):
     '''
     Фнукция вызывает один сбор перпендикулярных ребер + построение отдельного strokemesh по собранным петлям
     Также производит очистку памяти и обновление strokemesh на экране
@@ -865,7 +865,7 @@ def strokes_nocross(name: str, index: int, z_coord: int, start_loop: BMLoop, bm:
     '''
     # создаем объект, меш, привязываем к коллекции, все пустое.
     # это - будущий накопитель для кривых-петель-штрихов.
-    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index))
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
     index += 1
     strokes_mesh = strokes_obj.data
     # создает bmesh для него чтобы можно было добавлять точки.
@@ -877,7 +877,7 @@ def strokes_nocross(name: str, index: int, z_coord: int, start_loop: BMLoop, bm:
     result = loops_for_loop_by_edge_nocross_concrete_loop(start_loop, visited_faces_id)
     for idx, item in enumerate(result):
         (faces_in_loop, loops, change_direction_face) = item
-        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0.1*z_coord, bm, strokes_bm, loops)
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm, loops)
         z_coord += 1
     #for id in visited_faces_id:
     #    bm.faces[id].select = True
@@ -910,7 +910,7 @@ def choose_loop(not_visited_face_id: List[int], bm: BMesh):
     return loop
 
 
-def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
+def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int):
     '''
     Функция для построения направляющих по всему мешу
     Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
@@ -926,9 +926,9 @@ def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
 
     count_not_visited_start = len(not_visited_face_id)
 
-    index = 0
-    z_coord = 0
-    name = "StrokesMesh_"
+    index = MESH_NAME_IDX_START
+    z_coord = Z_COORD_START
+    name = MESH_NAME_BASE
     visited_faces_id = set()
 
 
@@ -936,7 +936,7 @@ def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
    # print("not_visited_id: " + str(not_visited_face_id))
 
 
-    (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, start_edge.link_loops[0], bm, visited_faces_id)
+    (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, start_edge.link_loops[0], bm, visited_faces_id, Z_STEP, COL_NAME)
     not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
 
    # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
@@ -949,7 +949,7 @@ def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
         loop_next = choose_loop(not_visited_face_id, bm)
     # запустить обход из нее
     # построить в отдельный strokemesh нужные вершины и цепь
-        (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, loop_next, bm, visited_faces_id)
+        (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME)
     # обновить множество непосещенных граней
         not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
 
@@ -996,7 +996,7 @@ def convert_to_curve_all_strokemesh(name: str, count: int, mesh_obj: Object):
         current_obj = stroke_obj_next
 
 # вызов автозаполнения nocross
-def test_auto_strokes_nocross():
+def test_auto_strokes_nocross(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int):
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
@@ -1015,7 +1015,7 @@ def test_auto_strokes_nocross():
     # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!  
 
     # автозаполнение базовое
-    count, name = auto_strokes_nocross(bm, starting_edge) 
+    count, name = auto_strokes_nocross(bm, starting_edge, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START) 
 
      # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
@@ -1025,7 +1025,7 @@ def test_auto_strokes_nocross():
     convert_to_curve_all_strokemesh(name, count, mesh_obj)  
 
 # вызов обхода одной петли без сбора перпендикуляров, nocross
-def test_collect_loop_nocross():
+def test_collect_loop_nocross(Z_STEP: float, COL_NAME: str):
      #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
@@ -1033,7 +1033,7 @@ def test_collect_loop_nocross():
     # создаем объект, меш, привязываем к коллекции, все пустое.
     # это - будущий накопитель для кривых-петель-штрихов.
     name = "StrokesMesh"
-    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name)
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name, COL_NAME)
     strokes_mesh = strokes_obj.data
     # создает bmesh для него чтобы можно было добавлять точки.
     strokes_bm = bmesh.new()
@@ -1069,7 +1069,7 @@ def test_collect_loop_nocross():
     #result = loops_for_loop_by_edge(starting_edge, visited_faces_id)
     # обход с остановкой на посещенных гранях
     (faces_in_loop, edge_ring, idx_change_dir, visited_not_quads) = collect_face_loop_with_recording_visited_not_quads_nocross(starting_edge, visited_faces_id)
-    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, idx_change_dir, 0.1, bm, strokes_bm, edge_ring)
+    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, idx_change_dir, Z_STEP, bm, strokes_bm, edge_ring)
     for id in visited_faces_id:
         bm.faces[id].select = True
 
@@ -1086,7 +1086,7 @@ def test_collect_loop_nocross():
     strokes_bm.free()
 
 # вызов одного обхода со сбором перпендикуляров, без автозаполнения
-def test_loops_for_loop_nocross():
+def test_loops_for_loop_nocross(Z_STEP: float, COL_NAME: str):
     
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
@@ -1095,7 +1095,7 @@ def test_loops_for_loop_nocross():
     # создаем объект, меш, привязываем к коллекции, все пустое.
     # это - будущий накопитель для кривых-петель-штрихов.
     name = "StrokesMesh"
-    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name)
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name, COL_NAME)
     strokes_mesh = strokes_obj.data
     # создает bmesh для него чтобы можно было добавлять точки.
     strokes_bm = bmesh.new()
@@ -1133,7 +1133,7 @@ def test_loops_for_loop_nocross():
     result = loops_for_loop_by_edge_nocross(starting_edge, visited_faces_id)
     for idx, item in enumerate(result):
         (faces_in_loop, loops, change_direction_face) = item
-        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, 0.1*idx, bm, strokes_bm, loops)
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*idx, bm, strokes_bm, loops)
     for id in visited_faces_id:
         bm.faces[id].select = True
 
@@ -1241,12 +1241,25 @@ def main():
     STROKEMESH_NAME_BASE = "StrokesMesh_"
     Z_STEP = 0.1
 
+    last_col_idx = get_last_collection_index(COLLECTION_NAME_BASE)
+    last_strokemesh_idx = get_last_strokemesh_index(STROKEMESH_NAME_BASE, COLLECTION_NAME_BASE + str(last_col_idx))
+    if (last_strokemesh_idx == -1):
+        last_z_coord = -1 # либо 0, все равно
+    else:
+        last_z_coord = get_last_z_coord(STROKEMESH_NAME_BASE + str(last_strokemesh_idx))
+
+    new_col_name = COLLECTION_NAME_BASE + str(last_col_idx + 1)
+    new_strokemesh_idx_start = last_strokemesh_idx + 1
+    # TODO: сомневаюсь в делении и округление, протестить
+    # да вроде все корректно
+    new_z_coord = round(last_z_coord / Z_STEP) + 1
+
     # одна петля без перпендикуляров
-    #test_collect_loop_nocross()
+    #test_collect_loop_nocross(Z_STEP, new_col_name)
     # перпендикуляры
-    #test_loops_for_loop_nocross()
+    #test_loops_for_loop_nocross(Z_STEP, new_col_name)
     # автозаполнение
-    #test_auto_strokes_nocross()
+    test_auto_strokes_nocross(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
 
     # вычисление последний параметров создания мешей
     #test_getting_last_indexes()
