@@ -932,15 +932,15 @@ def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
     visited_faces_id = set()
 
 
-    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
-    print("not_visited_id: " + str(not_visited_face_id))
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
 
 
     (visited_faces_id, index, z_coord) = strokes_nocross(name, index, z_coord, start_edge.link_loops[0], bm, visited_faces_id)
     not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
 
-    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
-    print("not_visited_id: " + str(not_visited_face_id))
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
 
 
     # пока непосещенные не пусты:
@@ -954,12 +954,13 @@ def auto_strokes_nocross(bm: BMesh, start_edge: BMEdge):
         not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
 
 
-        print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
-        print("not_visited_id: " + str(not_visited_face_id))
+    #    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+    #   print("not_visited_id: " + str(not_visited_face_id))
 
     # TODO
     # все stroke_obj надо будет потом превратить в кривые, но это либо уже после всего обхода,
-    # либо на пошаговом вводе можно будет сделать эту операцию после каждого обхода                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+    # либо на пошаговом вводе можно будет сделать эту операцию после каждого обхода           
+    # -- на данный момент вовне есть функция обхода всех StrokeMesh_i по именам, конвертирующая их в кривые :)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
 
     return index, name
 
@@ -975,6 +976,9 @@ def output_not_visited_faces(bmesh, visited_faces_id):
     print("Not visited faces: " + str(len(not_visited)) + " " + str(not_visited))
 
 def convert_to_curve_all_strokemesh(name: str, count: int, mesh_obj: Object):
+    '''
+    Функция, которая обходит все "StrokeMesh_i" str(name+count) и конвертирует в кривые
+    '''
     #--- EDIT MODE TO OBJECT MODE
     bpy.ops.object.editmode_toggle()
     bpy.context.view_layer.update()
@@ -1018,14 +1022,7 @@ def test_auto_strokes_nocross():
     # очистка памяти от bm
     bm.free()
 
-    convert_to_curve_all_strokemesh(name, count, mesh_obj)
-
-        #--- EDIT MODE
- #   bpy.ops.object.editmode_toggle()
- #   bpy.context.view_layer.update()
-    
-    # Конвертирование накопителя строк в кривую
- #   convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)   
+    convert_to_curve_all_strokemesh(name, count, mesh_obj)  
 
 # вызов обхода одной петли без сбора перпендикуляров, nocross
 def test_collect_loop_nocross():
@@ -1159,13 +1156,100 @@ def test_loops_for_loop_nocross():
     # Конвертирование накопителя строк в кривую
   #  convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)    
 
+def get_last_collection_index(col_name: str):
+    '''
+    Функция проверяет наличие папки с именем "<col_name>_<index>"
+    и вовзращает самый большой index
+    Если вернула -1, значит, папки отсутствуют
+    '''
+    max_index = -1
+    for col in bpy.data.collections:
+        if (col_name in col.name):
+            current_index = int(col.name.split('_')[-1]) # номер идет последним
+            if (current_index > max_index):
+                max_index = current_index
+    return max_index
+
+def get_last_strokemesh_index(mesh_name: str, last_col_name: str):
+    '''
+    Функция ищет в папке last_col_name объек с именем "<mesh_name>_<index>"
+    и вовзращает самый большой index
+    Если вернула -1, значит, папка пустая, объекты отсутствуют
+    '''
+    max_index = -1
+    for strokemesh in bpy.data.collections[last_col_name].objects:
+        current_index = int(strokemesh.name.split('_')[-1]) # номер идет последним
+        if (current_index > max_index):
+                max_index = current_index
+    return max_index
+
+def get_last_z_coord(last_mesh_name: str):
+    '''
+    Функция ищет в строкмеше last_mesh_name точку с максимальной координатой по z
+    и вовзращает этот максимальный z
+    Ожидается, что в last_mesh_name действительно будет самая высокая точка среди всех
+    строкмешей.
+    Чтобы вычислить следующую высоту, к данной высоте надо будет прибавить Z_STEP
+    TODO: ввести Z_STEP. стоит сделать умножение или сложение??
+    '''
+    object: Object = bpy.data.objects[last_mesh_name]
+    #stroke_bm = bmesh.new()
+    #stroke_bm.from_mesh(object.data)
+    #v = stroke_bm.verts[0]
+    curve = object.data
+    max_z = -1
+
+    # обычный способ найти максимальную по высоте точку: перебор всех сплайнов
+    for spline in curve.splines:
+        #current_z = spline.bezier_points[0].co[2]
+        current_z = spline.points[0].co[2]
+        if (current_z > max_z):
+            max_z = current_z
+    # можно сделать способ, полагающийся на то, что сплайны создаются так что у каждого следующего координата z больше предыдущего,
+    # поэтому помжно просто взять самый первый сплайн и всё
+
+    #v_id_and_z_coords = [(v.index, v.co[2]) for v in stroke_bm.verts] # (v_idx, z_coord) list of tuples
+    #v_id_and_z_coords.sort(key=lambda a: a[1]) # сортировка по координате
+    #return v_id_and_z_coords[-1][1] # возвращаем максимальную высоту
+
+    #z_coords = [v.co[2] for v in stroke_bm.verts] # (z_coord) list
+    #z_coords.sort() # сортировка по координате
+    #return z_coords[-1] # возвращаем максимальную высоту по z
+
+    return max_z
+
+def test_getting_last_indexes():
+    col_name = "TestCol_"
+    last_col_id = get_last_collection_index(col_name)
+    if (last_col_id == -1):
+        print("No collections exist")
+        return
+
+    mesh_name = "StrokesMesh_"
+    last_mesh_id = get_last_strokemesh_index(mesh_name, col_name + str(last_col_id))
+    if (last_mesh_id == -1):
+        print("No strokemeshes exist")
+        return
+    
+    last_z = get_last_z_coord(mesh_name + str(last_mesh_id))
+
+    print("last col: " + str(last_col_id) + " last mesh: " + str(last_mesh_id) + " last z: " + str(last_z))
+
 def main():
+    # главные параметры для создания строкмешей!
+    COLLECTION_NAME_BASE = "TestCol_"
+    STROKEMESH_NAME_BASE = "StrokesMesh_"
+    Z_STEP = 0.1
+
     # одна петля без перпендикуляров
     #test_collect_loop_nocross()
     # перпендикуляры
     #test_loops_for_loop_nocross()
     # автозаполнение
-    test_auto_strokes_nocross()
+    #test_auto_strokes_nocross()
+
+    # вычисление последний параметров создания мешей
+    #test_getting_last_indexes()
 
 if __name__ == "__main__":
     main()
