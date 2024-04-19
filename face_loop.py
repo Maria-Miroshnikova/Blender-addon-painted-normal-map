@@ -12,7 +12,7 @@ from bpy.types import Mesh, Object, Collection
 from mathutils import Vector
 from typing import List, Set, Tuple
 
-import random
+import random, math
 
 ##############################################
 # функции обхода loop
@@ -987,7 +987,7 @@ def output_not_visited_faces(bmesh, visited_faces_id):
     print("Visited faces: " + str(len(visited_faces_id)) + "/" + str(len(bmesh.faces)))
     print("Not visited faces: " + str(len(not_visited)) + " " + str(not_visited))
 
-def convert_to_curve_all_strokemesh(name: str, count: int, mesh_obj: Object):
+def convert_to_curve_all_strokemesh(name: str, index_start: int, count: int, mesh_obj: Object):
     '''
     Функция, которая обходит все "StrokeMesh_i" str(name+count) и конвертирует в кривые
     '''
@@ -997,7 +997,7 @@ def convert_to_curve_all_strokemesh(name: str, count: int, mesh_obj: Object):
     
     current_obj = mesh_obj
 
-    for index in range(0, count):
+    for index in range(index_start, count):
         # получить stroke obj по имени
         stroke_obj_next = bpy.data.objects[name + str(index)]
         # Конвертирование накопителя строк в кривую
@@ -1034,7 +1034,7 @@ def test_auto_strokes_nocross(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str,
     # очистка памяти от bm
     bm.free()
 
-    convert_to_curve_all_strokemesh(name, count, mesh_obj)  
+    convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
 
 # вызов обхода одной петли без сбора перпендикуляров, nocross
 def test_collect_loop_nocross(MESH_NAME_WITH_IDX: str, Z_STEP: float, COL_NAME: str, Z_COORD_START: int):
@@ -1255,231 +1255,6 @@ def test_getting_last_indexes():
 
     print("last col: " + str(last_col_id) + " last mesh: " + str(last_mesh_id) + " last z: " + str(last_z))
 
-# эта функция нужна для вызова автозаполнения на двух отдельных половинах симметричной модели
-# в качестве стартового ребра нужно на обеих половинах выбрать симметричное ребро!!!
-# при вызове не второй половине нужно расскоментировать строчку с нужной start_loop
-# автозаполнение с симметрией
-# !!! этот метод НЕ РАБОТАЕТ и не будет работать. 1) здесь контроль направления только при первом вызове 2) контролировать направление просто НЕЛЬЗЯ
-# из-за его локальности и непредсказуемости (link_loop[0])
-def test_auto_stroke_nocross_for_symmetry(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int):
-    #--- EDIT MODE!
-    mesh_obj = bpy.context.active_object
-    bm = bmesh.from_edit_mesh(mesh_obj.data)
-
-    # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
-    selected_edges = [edge for edge in bm.edges if edge.select]
-    
-    if not selected_edges:
-        starting_edge = bm.edges[0]
-#        next_edge = bm.edges[10]
-    else:
-        starting_edge = selected_edges[0]
-#        next_edge = selected_edges[1]
-        
-    # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!  
-
-    # выбор направления обхода: РАСКОММЕНТИРОВАТЬ НУЖНОЕ
-    # --- при обходе первой половины
-    start_loop = starting_edge.link_loops[0]
-    # --- при обходе второй половины
-    #start_loop = starting_edge.link_loops[0].link_loop_next.link_loop_next
-
-    # автозаполнение базовое
-    count, name = auto_strokes_nocross(bm, start_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START) 
-
-     # обновление объекта на экране
-    bmesh.update_edit_mesh(mesh_obj.data)
-    # очистка памяти от bm
-    bm.free()
-
-#    convert_to_curve_all_strokemesh(name, count, mesh_obj)
-
-# симметрия со словарем по координате=ключу - НЕ РАБОЧИЙ МЕТОД
-def make_symmetry_dictionary(bm: BMesh):
-    symm_dict = {} # face_id1 : face_id2, face_id2 : face_id1
-    
-    #median_visited_set = set()
-    
-    median_dict = {} # median : face_id
-    index_dict = {} # face_id: median
-
-    idx = 1
-    for face in bm.faces:
-        median: Vector = face.calc_center_median()
-        median.freeze()
-        median_symm = Vector((-median.x, median.y, median.z))
-        median_symm.freeze()
-        #median_tuple = (median.x, median.y, median.z)
-        #median_tuple = (round(median.x, 5), round(median.y, 5), round(median.z, 5))
-        #median_tuple_symm = (-median.x, median.y, median.z)
-        #median_tuple_symm = (round(-median.x, 5), round(median.y, 5), round(median.z, 5))
-
-        #assert(median_tuple == (-median_tuple_symm[0], median_tuple_symm[1], median_tuple_symm[2]))
-        assert(median == Vector((-median_symm.x, median_symm.y, median_symm.z)))
-        #if (median_tuple_symm in symm_dict):
-        #    symm_dict[median_tuple_symm] = m
-        
-        # просто помещаем вообще все медианы в словарь
-        #assert(not(median_tuple in median_dict))
-        #median_dict[median_tuple] = face.index
-        median_dict[median] = face.index
-        #index_dict[face.index] = median_tuple
-        index_dict[face.index] = median
-        # симметричная медиана уже есть в словаре
-        #if (median_tuple_symm in median_dict):
-        #    id1 = face.index
-        #    id2 = median_dict[median_tuple_symm]
-        #    symm_dict[id1] = id2
-        #    symm_dict[id2] = id1
-        if (median_symm in median_dict):
-            id1 = face.index
-            id2 = median_dict[median_symm]
-            symm_dict[id1] = id2
-            symm_dict[id2] = id1
-        idx += 1
-    #print("faces: " + str(idx -1 ))
-    #for key in median_dict.keys():
-    #    symm_key = (-key[0], key[1], key[2])
-    #    id1 = median_dict[key]
-    #    id2 = median_dict[symm_key]
-    #    assert(median_dict[symm_key] in symm_dict)
-    #    assert(median_dict[key] in symm_dict)
-    for val in median_dict.values():
-        if (val not in symm_dict):
-            print(str(val) + " median: " + str(index_dict[val]))
-    print("-----")
-    for face in bm.faces:
-        if (face.index not in symm_dict):
-            print(str(face.index) + " median: " + str(face.calc_center_median()))
-            bm.faces[face.index].select = True
-    print("-----")
-    return symm_dict
-
-# преобразование вектора в строку для сортировки
-def compare_vectors(tuple: Tuple[int, Vector]):
-    return str(tuple[1].x) + str(tuple[1].y) + str(tuple[1].z)
-
-# симметрия с сортировкой строк - НЕ РАБОЧИЙ МЕТОД
-def make_symmetry_dictionary_2(bm: BMesh):
-    symm_dict = {} # face_id1 : face_id2, face_id2 : face_id1
-    
-    #median_visited_set = set()
-    
-#    median_dict = {} # median : face_id
-#    index_dict = {} # face_id: median
-
-    id_median_list = []
-
-    for face in bm.faces:
-        median: Vector = face.calc_center_median()
-        id_median_list.append((face.index, median))
-    
-    id_median_list_sorted = sorted(id_median_list, key=compare_vectors)
-
-    median_127 = 0
-    median_396 = 0
-    median_414 = 0
-
-    # теория: все точки в одной половине - одного знака, все точки в друго - другого знака (по х)
-    # то есть ровно половина списка с отриц. х, ровно половина - с положительным
-    id_half: int = len(bm.faces) // 2
-    for idx in range(0, id_half):
-        idx1 = id_median_list_sorted[idx][0]
-        median1 = id_median_list_sorted[idx][1]
-        idx2 = id_median_list_sorted[id_half + idx][0]
-        median2 = id_median_list_sorted[id_half + idx][1]
-        symm_dict[idx1] = idx2
-        symm_dict[idx2] = idx1
-
-        if (idx1 == 127):
-            median_127 = median1
-        if (idx1 == 396):
-            median_396 = median1
-        if (idx1 == 414):
-            median_414 = median1
-        if (idx2 == 127):
-            median_127 = median2
-        if (idx2 == 396):
-            median_396 = median2
-        if (idx2 == 414):
-            median_414 = median2
-
-
-    #for val in median_dict.values():
-     #   if (val not in symm_dict):
-     #       print(str(val) + " median: " + str(index_dict[val]))
-    #print("-----")
-    for face in bm.faces:
-        if (face.index not in symm_dict):
-            print(str(face.index) + " median: " + str(face.calc_center_median()))
-            bm.faces[face.index].select = True
-    print("-----")
-    return symm_dict
-
-#from math import sqrt 
-import math
-from decimal import Decimal
-# расстояние между Decimal векторами, без квадратного корня
-def distance_v(v1: Tuple[Decimal], v2: Tuple[Decimal]):
-    x_comp: Decimal = (v1[0] - v2[0])*(v1[0] - v2[0])
-    y_comp: Decimal = (v1[1] - v2[1])*(v1[1] - v2[1])
-    z_comp: Decimal = (v1[2] - v2[2])*(v1[2] - v2[2])
-    if not ((x_comp > Decimal(0))):
-        print("problem")
-    assert(x_comp > Decimal(0))
-    assert(y_comp > Decimal(0))
-    assert(z_comp > Decimal(0))
-    return Decimal(x_comp + y_comp + z_comp)
-
-# подсчет центра грани без деления, в decimal
-def count_median(face: BMFace):
-    x: Decimal = Decimal()
-    y: Decimal = Decimal()
-    z: Decimal = Decimal()
-    for v in face.verts:
-        x += Decimal(str(v.co.x))
-        y += Decimal(str(v.co.y))
-        z += Decimal(str(v.co.z))
-    # нужно ли тут деление???
-    count = len(face.verts)
-    #return (Decimal(x/count), Decimal(y/count), Decimal(z/count))
-    return (x, y, z)
-
-# симметрия с Decimal вычислениями - НЕ РАБОЧИЙ МЕТОД
-def make_symmetry_dictionary_3(bm: BMesh):
-    symm_dict = {} # face_id1 : face_id2, face_id2 : face_id1
-
-    #id_median_list = []
-    id_median_x_positive = []
-    id_median_x_negative = []
-                                                                                 
-    for face in bm.faces:
-        #median: Vector = face.calc_center_median()
-        median: Tuple[Decimal, Decimal, Decimal] = count_median(face)
-        if (median[0] > 0):
-            id_median_x_positive.append((face.index, median))
-        else:
-            id_median_x_negative.append((face.index, median))
-    # надеюсь, что не будет проблем с близостью к нулю....
-    assert(len(id_median_x_negative) == len(id_median_x_positive))
-
-    for tuple1 in id_median_x_negative:
-        (index1, median1) = tuple1
-        #median_symm_expected1: Vector = Vector((-median1.x, median1.y, median1.z))
-        median_symm_expected1: Tuple[Decimal, Decimal, Decimal] = (-median1[0], median1[1], median1[2])
-        min_dist: Decimal = Decimal('Infinity')
-        min_index = -1
-        for tuple2 in id_median_x_positive:
-            (index2, median2) = tuple2
-            dist: Decimal = distance_v(median_symm_expected1, median2)
-            if dist < min_dist:
-                min_dist = dist
-                min_index = index2
-        assert(min_index >= 0)
-        symm_dict[index1] = min_index
-        symm_dict[min_index] = index1
-    return symm_dict
-
 # симметрия по близости ожидаемого центра грани и действительного центра грани
 # ОГРАНИЧЕНИЯ:
 # 1) O(n^2) от количества граней. Задумывается на модели ~10к граней
@@ -1529,33 +1304,6 @@ def make_symmetry_dictionary_by_median_similarity(bm: BMesh):
         symm_dict[index1] = min_index
         symm_dict[min_index] = index1
     return symm_dict
-
-# симметрия по ray_cast - НЕ РАБОЧИЙ МЕТОД
-# непонятно, как пускать луч, если в качестве результата только 1 пересечение
-def make_symmetry_dictionary_by_x(bm: BMesh, mesh_obj: Object):
-    symm_dict = {} # face_id1 : face_id2, face_id2 : face_id1
-
-    #id_median_list = []
-    id_median_x_positive = []
-    id_median_x_negative = []
-                                                                                 
-    for face in bm.faces:
-        median: Vector = face.calc_center_median()
-        if (median.x > 0):
-            id_median_x_positive.append((face.index, median))
-        else:
-            id_median_x_negative.append((face.index, median))
-    # надеюсь, что не будет проблем с близостью к нулю....
-    assert(len(id_median_x_negative) == len(id_median_x_positive))
-
-    # настраиваемый параметр TODO который надо подбирать для модели
-    y_distance = -10
-    ray_dictance = 20
-    for (index1, median1) in id_median_positive:
-        median_expected = Vector((-median1.x, median1.y, median1.z))
-        ray_cast_position = Vector((median_expected.x, y_distance, median_expected.z))
-        result = mesh_obj.ray_cast(ray_cast_position, median_expected, ray_dictance)
-
 
 def make_symmetrical_face_list(faces_in_ring: List[BMFace], bm: BMesh, symm_dict: dict):
     '''
@@ -1640,8 +1388,14 @@ def get_start_loop_from_face_ring(symm_face_ring: List[BMFace]):
     assert(start_loop.face == face1)
     return start_loop
 
-# вызывать для второй половины
-def stroke_nocross_for_symmetry(list_orto_rings: List[Tuple[List[BMFace], List[BMLoop], int]], symm_dict: dict, bm: BMesh):
+# вызывать для второй половины ИЗОЛИРОВАННОЙ
+def loops_for_loop_by_edge_nocross_for_symmetry(list_orto_rings: List[Tuple[List[BMFace], List[BMLoop], int]], symm_dict: dict, bm: BMesh):
+    '''
+    Функция, которая выдает результат как loops_for_loop_by_edge_nocross
+    Эта функция не вызывает алгоритм сбора перпендикулярных колец, а отображает готовый результат вызова для одной области
+    Функция работает только с симметрией по оХ
+    Не учитывает и не записывает отображенные грани в посещенные! Просто создает симметричный набор для process_uv_....
+    '''
     symm_list_orto_rings: List[Tuple[List[BMFace], List[BMLoop], int]] = []
     for idx, item in enumerate(list_orto_rings):
         (faces_in_loop, loops, change_direction_face) = item
@@ -1670,7 +1424,8 @@ def test_make_symmetry_dictionary():
     bmesh.update_edit_mesh(mesh_obj.data)
     bm.free
 
-def test_stroke_nocross_for_symmetry(MESH_NAME_BASE: str, MESH_INDEX: int, Z_STEP: float, COL_NAME: str, Z_COORD_START: int):
+# одноп остроение перпендикуляров с СИММЕТРИЕЙ
+def test_loops_for_loop_by_edge_nocross_for_symmetry(MESH_NAME_BASE: str, MESH_INDEX: int, Z_STEP: float, COL_NAME: str, Z_COORD_START: int):
     # построение словаря
     # один вызов сбора перпендикуляров ИЗ ИЗОЛИРОВАННОЙ ОБЛАСТИ + вызов симметричного построения
 
@@ -1720,7 +1475,7 @@ def test_stroke_nocross_for_symmetry(MESH_NAME_BASE: str, MESH_INDEX: int, Z_STE
     strokes_bm_symm.from_mesh(strokes_mesh_symm)
 
     # симметрия!
-    symm_orto_rings = stroke_nocross_for_symmetry(result, symm_dict, bm)
+    symm_orto_rings = loops_for_loop_by_edge_nocross_for_symmetry(result, symm_dict, bm)
     for idx, item in enumerate(symm_orto_rings):
         (faces_in_loop, loops, change_direction_face) = item
         # TODO: пока что запись в тот же строкмеш что при первом обходе. Нужно создавать отдельный!
@@ -1753,7 +1508,165 @@ def test_stroke_nocross_for_symmetry(MESH_NAME_BASE: str, MESH_INDEX: int, Z_STE
   #  convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)    
     return
 
+# версия strokes_nocross для вызова на изолированных половинах симметричной модели
+# TODO: 1) нет записи симметричных граней в посещенные
+# TODO: 2) строкмеш и симметричный строкмеш строятся друг за другом. Возможно, лучше было бы в отдельных папках!
+def strokes_nocross_for_symmetry(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, symm_dict: dict):
+    '''
+    Фнукция вызывает один сбор перпендикулярных ребер + построение отдельного strokemesh по собранным петлям
+    Также производит очистку памяти и обновление strokemesh на экране
+    !! Изменяет значение z_coord и index
+    Возвращает индексы всех посещенных граней-квад
 
+    name - базовое имя всех strokemesh
+    index - номер меша
+    z_coord - сдвиг по z для направляющих в strokemesh
+    startloop - с какой лупы начинается обход
+    bm - модель, для которой строится strokemesh
+    '''
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
+    index += 1
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
+
+    # запуск от заданного ребра
+    # TODO: здесь лупа для обхода выбирается случайно из 2 луп данного ребра!
+    result = loops_for_loop_by_edge_nocross_concrete_loop(start_loop, visited_faces_id)
+    for idx, item in enumerate(result):
+        (faces_in_loop, loops, change_direction_face) = item
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm, loops)
+        z_coord += 1
+    
+    # создаем объект, меш, привязываем к коллекции, все пустое. ДЛЯ СИММЕТРИИ
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj_symm = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
+    index += 1
+    strokes_mesh_symm = strokes_obj_symm.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm_symm = bmesh.new()
+    strokes_bm_symm.from_mesh(strokes_mesh_symm)
+
+    # построение СИММЕТРИЧНОГО строкмеша
+    list_orto_rings_symm = loops_for_loop_by_edge_nocross_for_symmetry(result, symm_dict, bm)
+    for idx, item in enumerate(list_orto_rings_symm):
+        (faces_in_loop, loops, change_direction_face) = item
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm_symm, loops)
+        z_coord += 1
+
+
+
+    # TODO: это для дебага в основном
+    for id in visited_faces_id:
+        bm.faces[id].select = True
+
+    # очистка памяти и обновление StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+    strokes_bm.free()
+
+    # очистка памяти и обновление СИММЕТРИЧНОГО StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm_symm.to_mesh(strokes_mesh_symm)
+    strokes_obj_symm.data.update()
+    strokes_bm_symm.free()
+
+    return visited_faces_id, index, z_coord
+
+# версия auto_strokes_nocross для вызова на изолированных половинах симметричной модели
+# без запоминания посещений на симметричной половине !!!!!!
+# TODO: можно было бы ускорить, если при определенный непосещенных граний избежать вычисление центров и сравнение знака по х!
+def auto_strokes_nocross_for_symmetry(bm: BMesh, start_loop: BMLoop, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int):
+    '''
+    Функция для построения направляющих по всему мешу
+    Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
+    Запускает сбор перпендикулярных петель, пока не обойдет все вершины (учитываются только квады)
+    В базовом случае предлагается в качестве start_loop передавать сюда start_edge.link_loops[0]
+    Но может понадобиться более точнее управление
+    '''
+
+    # построение словаря симметричных граней
+    symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
+
+    # определение, на какой половине вызывается обход:
+    is_positive_x_half = False
+    if (start_loop.face.calc_center_median().x > 0):
+        is_positive_x_half = True
+
+    # все грани меша = непосещенные
+    not_visited_face_id = set() #set([face.index for face in bm.faces])
+    # выкинуть не квады и грани из второй половины
+    for face in bm.faces:
+        if is_quad(face):
+            if (is_positive_x_half) and (face.calc_center_median().x > 0):
+                not_visited_face_id.add(face.index)
+            elif (not is_positive_x_half) and (face.calc_center_median().x < 0):
+                not_visited_face_id.add(face.index)
+
+    #count_not_visited_start = len(not_visited_face_id)
+
+    index = MESH_NAME_IDX_START
+    z_coord = Z_COORD_START
+    name = MESH_NAME_BASE
+    visited_faces_id = set()
+
+
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
+
+
+    (visited_faces_id, index, z_coord) = strokes_nocross_for_symmetry(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, symm_dict)
+    not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
+
+
+    # пока непосещенные не пусты:
+    while len(not_visited_face_id) > 0:
+    # выбрать из непосещенных граней одну, взять конкретную лупу / попросить ввести (?)
+        loop_next = choose_loop(not_visited_face_id, bm)
+    # запустить обход из нее
+    # построить в отдельный strokemesh нужные вершины и цепь
+        (visited_faces_id, index, z_coord) = strokes_nocross_for_symmetry(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, symm_dict)
+    # обновить множество непосещенных граней
+        not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+
+    #    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+    #   print("not_visited_id: " + str(not_visited_face_id))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+
+    return index, name
+
+# автозаполнение с СИММЕТРИЕЙ на изолированных половинах одной модели!
+def test_auto_stroke_nocross_for_symmetry(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int):
+    #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
+    selected_edges = [edge for edge in bm.edges if edge.select]
+    
+    if not selected_edges:
+        starting_edge = bm.edges[0]
+    else:
+        starting_edge = selected_edges[0]
+        
+    # предположим, что выбрано ребро на квадратной грани, а то в итоге пустая лупа будет!  
+
+    # автозаполнение базовое С СИММЕТРИЕЙ
+    count, name = auto_strokes_nocross_for_symmetry(bm, starting_edge.link_loops[0], Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START) 
+
+     # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # очистка памяти от bm
+    bm.free()
+
+    convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
 
 def main():
     ######## главные параметры для создания строкмешей!
@@ -1789,21 +1702,17 @@ def main():
     # автозаполнение
     #test_auto_strokes_nocross(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
 
-    # автозаполнение с симметрией
-    # !!! этот метод НЕ РАБОТАЕТ
-    #test_auto_stroke_nocross_for_symmetry(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
-
     # вычисление последних параметров создания мешей
     #test_getting_last_indexes()
-
-    # пока что НЕ РАБОТАЕТ т к не работает closest_....
-    #test_get_symmetrical_face()
 
     # построение словаря симметричных граней
     #test_make_symmetry_dictionary()
 
-    # перпендикуляры с симметрией (вызывать от изолированной области)
-    test_stroke_nocross_for_symmetry(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord)
+    # перпендикуляры с симметрией (вызывать от изолированной области) без автозаполнения
+    #test_loops_for_loop_by_edge_nocross_for_symmetry(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord)
+
+    # автозаполнение с СИММЕТРИЕЙ для двух изолированных половин одной модели
+    test_auto_stroke_nocross_for_symmetry(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
 
 if __name__ == "__main__":
     main()
