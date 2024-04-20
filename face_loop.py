@@ -1666,7 +1666,245 @@ def test_auto_stroke_nocross_for_symmetry(Z_STEP: float, COL_NAME: str, MESH_NAM
     # очистка памяти от bm
     bm.free()
 
-    convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
+    convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)
+
+##########################################
+# методы для считывания/редактирования границ
+
+# Этот метод НЕ РАБОЧИЙ
+# т.к. в vertex grop могут оказаться две вершины одного ребра, а само ребро
+# не предполагалось принадлежащим границе. Эту неоднозначность вводом в редакторе никак не решить
+def get_boundries_from_vgroups(mesh_obj: Object, bm: BMesh, group_name_base: str):
+    '''
+    Функция возвращает множество индексов всех ребер, являющихся границей (состоящих из вершин, записанных в какую-либо vertex group)
+    Можно переделать так, чтобы было известно, какой именно группе принадлежат ребра
+    '''
+    #boundries_list: List[set] = [] # boundry = set [edge_id from boundry]
+    bound_edges = set()
+    bound_verts = []
+    #for v in mesh_obj.data.vertices:
+        #if len(v.groups) > 0:
+    #    for group in v.groups:
+    #        if group_name_base in group.name:
+    #            bound_verts.append(v.index)
+    
+    # словарь id -> name для групп с подходящим именем
+    # не записываем в него группы, не относящиеся к границам
+    id_name_group_dict = {}
+    for group in mesh_obj.vertex_groups:
+        if (group_name_base in group.name):
+            id_name_group_dict[group.index] = group.name
+    for vert in mesh_obj.data.vertices:
+        vert_groups_id = [i.group for i in vert.groups]
+        for group_id in vert_groups_id:
+            if group_id in id_name_group_dict:
+                bound_verts.append(vert.index)
+    #vertexes_from_group = [vert for vert in mesh_obj.data.vertices if mesh_obj.vertex_groups[group_name].index in [i.group for i in vert.groups]]
+    for i in range(0, len(bound_verts)):
+        for j in range(i + 1, len(bound_verts)):
+            edge: BMEdge | None = bm.edges.get((bm.verts[bound_verts[i]], bm.verts[bound_verts[j]]))
+            if not (edge is None):
+                bound_edges.add(edge.index)
+    return bound_edges
+
+# константы для слоя принадлежности ребра к границам
+# можно давать каждой границе свой номер и записывать в слой номер, но пока что это не нужно
+IS_BORDER_EDGE = 1
+NOT_BORDER_EDGE = -1
+
+def write_edges_to_layer(mesh_obj: Object, bm: BMesh, layer_name: str, edges_id: List[int]):
+    '''
+    Функция записывает всем ребрам из заданного layer_name слоя ребер значения IS_BORDER_EDGE
+    Ничего не возвращает
+    Если слоя нет, создает его
+    '''
+    if layer_name not in bm.edges.layers.int:
+        edge_group_layer = bm.edges.layers.int.new(layer_name)
+    else:
+        edge_group_layer =  bm.edges.layers.int[layer_name]
+
+    for e in edges_id:
+        bm.edges[e][edge_group_layer] = IS_BORDER_EDGE
+
+def get_edges_from_layer(mesh_obj: Object, bm: BMesh, layer_name: str):
+    '''
+    Функция ищет ребра, у которых слой ребер layer_name имеет значение IS_BORDER_EDGE
+    Если слоя нет, возвращает пустое множество
+    '''
+    if layer_name not in bm.edges.layers.int:
+        return set()
+    else:
+        edge_group_layer =  bm.edges.layers.int[layer_name]
+    
+    border_edges_id = set()
+    for e in bm.edges:
+        if e[edge_group_layer] == IS_BORDER_EDGE:
+            border_edges_id.add(e.index)
+
+    return border_edges_id
+
+def delete_edges_from_layer(mesh_obj: Object, bm: BMesh, layer_name: str, edges_id: List[int]):
+    '''
+    Функция ищет ребра, у которых слой ребер layer_name имеет значение IS_BORDER_EDGE
+    И удаляет их со слоя (ставит в этом слое значение NOT_BORDGER_EDGE)
+    Если слоя нет, ничего не делает
+    Ничего не возвращает
+
+    Чтобы удалять все ребра со слоя, нужно передать просто все ребра bm сюда (их id)
+    '''
+    if layer_name not in bm.edges.layers.int:
+        return
+    else:
+        edge_group_layer =  bm.edges.layers.int[layer_name]
+    
+    for e in bm.edges:
+        if e[edge_group_layer] == IS_BORDER_EDGE:
+            e[edge_group_layer] = NOT_BORDER_EDGE
+
+def read_selected_edges(bm: BMesh):
+    '''
+    Функция возвращает множество индексов всех ребер, являющихся границей (выбранных на данный момент в EDIT MODE)
+    Предполагается, что после вызова этой функции последует вызов write_edges_to_layer, чтобы ребра сохранились в памяти
+    и в дальнейшем можно было оттуда их считывать
+    Или же вызывается функция delete_edges_from_layer!
+    '''
+    bound_edges_id = set()
+    for e in bm.edges:
+        if (e.select):
+            bound_edges_id.add(e.index)
+    return bound_edges_id
+
+def show_select_all_edges_from_layer(bm: BMesh, layer_name: str):
+    '''
+    Функция ищет все ребра, у которых в реберном слое layer_name стоит значение IS_BORDER_EDGE
+    и делает их выбранными в edit_mode
+    !!! При этом остальные ребра становятся невыбранными в edit_mode !!!
+
+    !!!!! НЕ ЗАБЫТЬ СДЕЛАТЬ bm.update
+    '''
+    if layer_name not in bm.edges.layers.int:
+        return
+    else:
+        edge_group_layer =  bm.edges.layers.int[layer_name]
+
+    for e in bm.edges:
+        if e[edge_group_layer] == IS_BORDER_EDGE:
+            e.select = True
+        else:
+            e.select = False
+
+def read_start_edge_and_ignore_selected_border_edges(bm: BMesh, layer_name: str):
+    '''
+    Эта функция считывает стартовое (выбранное) ребро и может работать при выбранных границах
+    Проигнорирует границы, т к вычислит их по записи в слое layer_name
+    
+    => Нельзя считать в качестве стартового ребро на границе!!!!!!!!!!
+    => Невозможен обход одиночной грани
+    TODO: потенциально можно прикрутить какую-то проверку, что грань одиночная, и все равно запустить в ней обход
+    '''
+    selected_edges = []
+    bordger_edges_id = set()
+    
+    if layer_name not in bm.edges.layers.int:
+        print("read start edge and ignore selected bordger: layer-border not found")
+    else:
+        edge_group_layer =  bm.edges.layers.int[layer_name]
+
+    for e in bm.edges:
+        if e[edge_group_layer] == IS_BORDER_EDGE:
+            bordger_edges_id.add(e.index)
+            continue
+        else:
+            if (e.select):
+                selected_edges.append(e)
+    return selected_edges, bordger_edges_id
+
+####################################################
+
+
+# BFS по граням
+def get_faces_accessable_from_edge(start_edge: BMEdge, bound_edges_id: set):
+    '''
+    Функция начинает обход всех граней из стартовой вершины (связанной с ней случайной грани)
+    не выходит за рамки любой границы
+    возвращает множество доступных граней
+    '''
+    visited_faces = set()
+    
+    not_visited_connected_faces = []
+
+    #TODO: проверка на приграничность?
+    start_face = start_edge.link_faces[0]
+    not_visited_connected_faces.append(start_face)
+
+  #  for e in start_face.edges:
+  #      if e.index in bound_edges_id:
+
+    while (len(not_visited_connected_faces) > 0):
+        face = not_visited_connected_faces.pop() #TODO: это стек или нет??
+        visited_faces.add(face)
+        # сбор доступных соседей
+        for loop in face.loops:
+            # ребро грани является границей - не переступаем через него
+            if loop.edge.index in bound_edges_id:
+                continue
+            # не граничное ребро -> берем соседа, если он не посещен и не стоит уже в очереди на посещение
+            connected_face = loop.link_loop_radial_next.face
+            if ( not (connected_face in not_visited_connected_faces)) and ( not (connected_face in visited_faces)):
+                not_visited_connected_faces.append(connected_face)
+    return visited_faces
+
+# одна петля без перпендикуляров
+
+def collect_loop_nocross_borders():
+    return
+
+#def test_collect_loop_nocross_borders(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord)
+    
+
+def test_learn_something():
+      #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    # работает со сменой половины!
+    #bpy.ops.mesh.loop_to_region(select_bigger=True)
+
+    # определяемся, с чего начинать. Если есть выбранная - с выбранной, иначе - с некой 0-ой
+    #selected_edges = [edge for edge in bm.edges if edge.select]
+    
+    #if not selected_edges:
+    #    starting_edge = bm.edges[0]
+    #else:
+    #    starting_edge = selected_edges[0]
+
+    ###### test border edges editing
+   # edges_id = read_selected_edges(bm)
+    layer_name = "is_border_edge"
+   # write_edges_to_layer(mesh_obj, bm, layer_name, edges_id)
+   # return
+   # show_select_all_edges_from_layer(bm, layer_name)    
+    
+    #for e in edges_from_layer:
+    #    bm.edges[e].select = True
+   # edges_from_layer = get_edges_from_layer(mesh_obj, bm, layer_name)
+   # bmesh.update_edit_mesh(mesh_obj.data)
+   # return
+    #delete_edges_from_layer(mesh_obj, bm, layer_name, edges_from_layer)
+    ####
+
+    selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
+    start_edge = selected_edges[0]
+    
+    inner_faces = get_faces_accessable_from_edge(start_edge, border_edges_id)
+
+    for f in inner_faces:
+        f.select = True
+
+    # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # очистка памяти от bm
+    bm.free()
 
 def main():
     ######## главные параметры для создания строкмешей!
@@ -1712,7 +1950,9 @@ def main():
     #test_loops_for_loop_by_edge_nocross_for_symmetry(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord)
 
     # автозаполнение с СИММЕТРИЕЙ для двух изолированных половин одной модели
-    test_auto_stroke_nocross_for_symmetry(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
+    #test_auto_stroke_nocross_for_symmetry(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
+
+    test_learn_something()
 
 if __name__ == "__main__":
     main()
