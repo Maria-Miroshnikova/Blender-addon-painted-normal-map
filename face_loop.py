@@ -348,6 +348,122 @@ def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_s
         loop = next_loop
     return faces_in_loop, loops, True, visited_not_quads
 
+# Версия функции loop_go_with_recording_visited_not_quads_nosross
+# останавливает сбор если встречает посещенную грань
+# TODO: по идее, проблем с цикличьностью и проверкой на посещенность не будет, ведь сверяем посещенность по visited_faces_id, а туда посещенные вершины записываются
+# во внешней функции, а не тут же
+def loop_go_with_recording_visited_not_quads_nocross_inside_borders(starting_loop: BMLoop, is_second_go: bool, visited_faces_id: Set[int], accessable_faces_id: Set[int], faces_first_go_id: Set[int] = []) -> (List[BMFace], List[BMLoop], bool, List[BMFace]):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад - останавливается
+    Возвращает список всех граней, вошедших в face loop при обходе в данном направлении
+    is_second_go нужен, чтобы при обходе в обратную сторону не добавлять первую грань еще раз в список
+    bool в возврате - это флаг того, цикличная дання петля или нет (то есть вернемся ли мы при обходе петли в ту грань, с которой обход начался)
+    visited_faces_id - уже известные до вызова этой функции грани, посещенные на других обходах
+    faces_first_go_id - посещенные на обходе в другую сторону грани, которые еще не занесли в глобальные посещенные грани visited_faces_id
+    accessable_faces_id - грани внутри области, по которым можно ходить
+    '''
+    visited_not_quads = []
+    faces_in_loop = []
+    faces_in_loop_id = set() # нужно для отслеживание самопересечений во время ЭТОГО обхода
+    loops = []
+    loop = starting_loop
+    
+    if (not is_quad(loop.face)):
+        if (loop.face.index not in accessable_faces_id):
+            return [], [], False, visited_not_quads
+        if (not is_second_go):
+            visited_not_quads.append(loop.face)
+        return [], [], False, visited_not_quads
+    # если это первый проход:
+    if (not is_second_go):
+        # если стартовая грань уже посещена - закончить обход
+        if (loop.face.index in visited_faces_id) or (loop.face.index in faces_first_go_id) or (loop.face.index not in accessable_faces_id):
+            return [], [], False, visited_not_quads
+        faces_in_loop.append(loop.face)
+        faces_in_loop_id.add(loop.face.index)
+        loops.append(loop)
+    
+    radial_loop = loop.link_loop_radial_next
+    
+    # проверяем, что mesh оборвался (плоская поверхность)
+    #if (radial_loop.face == loop.face):
+    #    return faces_in_loop, loops, False, visited_not_quads
+    # проверяем, что mesh оборвался (плоская поверхность)
+    # проверка основана на том, что у грани с обрывом на внешнем ребре только 1 link_loops
+    if (radial_loop == loop):
+        return faces_in_loop, loops, False, visited_not_quads
+
+    # проверяем, следующая грань это квада? 
+    is_next_face_quad = is_quad(radial_loop.face)
+    if (not is_next_face_quad):
+        if (radial_loop.face.index not in accessable_faces_id):
+            return faces_in_loop, loops, False, visited_not_quads
+        visited_not_quads.append(radial_loop.face)
+        # уперлись в не квадратную грань, конец обхода
+        return faces_in_loop, loops, False, visited_not_quads
+    else:
+        # если следующая грань уже посещена - закончить обход
+        # (посещена при обходе других петель / при обходе в другую сторону / при обходе в эту же строну)
+        if (radial_loop.face.index in visited_faces_id) or (radial_loop.face.index in faces_first_go_id) or (radial_loop.face.index in faces_in_loop_id) or (radial_loop.face.index not in accessable_faces_id):
+            return faces_in_loop, loops, False, visited_not_quads
+        # следующая грань не посещена, добавляем ее в инфу
+        faces_in_loop.append(radial_loop.face)
+        faces_in_loop_id.add(radial_loop.face.index)
+        if (is_second_go):
+            loops.append(radial_loop)
+        else:
+            loops.append(radial_loop.link_loop_next.link_loop_next)
+    next_loop = radial_loop.link_loop_next.link_loop_next
+    
+    # цикл прыжков для сбора всей лупы пока не упремся в не кваду или не вернемся в начальную (замкнутая лупа)
+    # или не закончится плоский меш
+    
+    loop = next_loop
+    while next_loop.edge != starting_loop.edge:
+        radial_loop = loop.link_loop_radial_next
+        next_loop = radial_loop.link_loop_next.link_loop_next
+        
+        # циклический меш
+        #if (next_loop.edge == starting_loop.edge):
+        #    break
+
+        # проверяем, что mesh оборвался (плоская поверхность)
+        #if (radial_loop.face == loop.face):
+         #   return faces_in_loop, loops, False, visited_not_quads
+        
+        # циклический меш
+        if (next_loop == starting_loop):
+            break
+
+        # проверяем, что mesh оборвался (плоская поверхность)
+        # проверка основана на том, что у грани с обрывом на внешнем ребре только 1 link_loops
+        if (radial_loop == loop):
+            return faces_in_loop, loops, False, visited_not_quads
+        
+        # проверяем, следующая грань это квада? 
+        is_next_face_quad = is_quad(radial_loop.face)
+        if (not is_next_face_quad):
+            if (radial_loop.face.index not in accessable_faces_id):
+                return faces_in_loop, loops, False, visited_not_quads
+            visited_not_quads.append(radial_loop.face)
+            return faces_in_loop, loops, False, visited_not_quads
+        else:
+             # если следующая грань уже посещена - закончить обход
+             # (посещена при обходе других петель / при обходе в другую сторону / при обходе в эту же строну)
+            if (radial_loop.face.index in visited_faces_id) or (radial_loop.face.index in faces_first_go_id) or (radial_loop.face.index in faces_in_loop_id) or (radial_loop.face.index not in accessable_faces_id):
+                return faces_in_loop, loops, False, visited_not_quads
+            faces_in_loop.append(radial_loop.face)
+            faces_in_loop_id.add(radial_loop.face.index)
+            if (is_second_go):
+                loops.append(radial_loop)
+            else:
+                loops.append(radial_loop.link_loop_next.link_loop_next)
+
+ #       next_loop.edge.select = True
+        loop = next_loop
+    return faces_in_loop, loops, True, visited_not_quads
+
 # Версия функции collect_face_loop_with_recording_visited_not_quads
 # останавливает сбор если встречает посещенную грань
 # может вернуть недействительный change_direction_face, если обход вызван из обойденной грани
@@ -411,6 +527,39 @@ def collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loo
     #обход в другую сторону, если не было цикла
     loop = loop_start.link_loop_next.link_loop_next
     faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id, set([face.index for face in faces_in_loop_one_direction]))
+    faces_in_loop.extend(faces_in_loop_two_direction)
+    loops.extend(loops_two_direction)
+    visited_not_quads.extend(visited_not_quads_two)
+    return (faces_in_loop, loops, change_direction_face, visited_not_quads)
+
+# Версия функции collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop
+# не выходит за грани, внутри которых оказалась стартовая loop
+def collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop_inside_borders(loop_start: BMLoop, visited_faces_id: Set[int], accessable_faces_id: Set[int]) -> (List[BMFace], List[BMLoop], int, List[BMFace]):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад/конец меша - меняет направление, попав снова - останавливается
+    Сначала идет только в одном направлении, затем в другую
+    Возвращает список всех граней, вошедших в face loop, и номер грани, с которой начался обход в другую сторону 
+    Если петля зациклена, возвращает -1 (надо соединить последнюю вершину с первой при создании кривой)
+    visited_faces_id - уже известные до вызова этой функции грани, посещенные на других обходах
+    accessable_faces_id - грани внутри области, по которым можно ходить
+    '''
+    visited_not_quads = []
+    faces_in_loop = []
+    loops = []
+    #обход в одну сторону
+    loop = loop_start
+
+    faces_in_loop_one_direction, loops_one_direction, was_cycled_loop, visited_not_quads_one = loop_go_with_recording_visited_not_quads_nocross_inside_borders(loop, False, visited_faces_id, accessable_faces_id)
+    faces_in_loop.extend(faces_in_loop_one_direction)
+    loops.extend(loops_one_direction)
+    visited_not_quads.extend(visited_not_quads_one)
+    change_direction_face = len(faces_in_loop) - 1
+    if (was_cycled_loop):
+        return (faces_in_loop, loops, -1, visited_not_quads)
+    #обход в другую сторону, если не было цикла
+    loop = loop_start.link_loop_next.link_loop_next
+    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross_inside_borders(loop, True, visited_faces_id, accessable_faces_id, set([face.index for face in faces_in_loop_one_direction]))
     faces_in_loop.extend(faces_in_loop_two_direction)
     loops.extend(loops_two_direction)
     visited_not_quads.extend(visited_not_quads_two)
@@ -599,6 +748,45 @@ def loops_for_loop_by_edge_nocross_concrete_loop(start_loop: BMLoop, visited_fac
         #faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross(edge, visited_faces_id)
         loop_start = loop.link_loop_next
         faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loop_start, visited_faces_id)
+       
+        for face in faces_in_loop_inner:
+            visited_faces_id.add(face.index)
+        # запись не квадов в посещенные
+        #for notquad in visited_not_quads_inner:
+        #    visited_faces_id.add(notquad.index)
+
+        result.append((faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner))
+    
+    return result
+
+# loops_for_loop_by_edge_nocross_concrete_loop, в которой обход петли останавливается при встрече с обойденной петлей
+# и всегда вызывает обход не по ребру, а по конкретной лупе!
+# важно для авто-обхода
+def loops_for_loop_by_edge_nocross_concrete_loop_inside_border(start_loop: BMLoop, visited_faces_id: Set[int], accessable_faces_id: Set[int]) -> List[Tuple[List[BMFace], List[BMLoop], int]]:
+    '''
+    идти вдоль лупы, содержащей данную start_edge и собирает все принадлежащие ей
+    перпендикулярные лупы
+    изменяет множество visited_faces_id
+    TODO: сразу же обрабатывать лупу или возвращать всё накопленное?
+    '''
+
+    result = []
+
+    # прошли по стартовой петле
+    faces_in_loop, edge_ring, idx_change_dir, visited_not_quads = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop_inside_borders(start_loop, visited_faces_id, accessable_faces_id)
+    
+    # запись не квадов в посещенные
+    #for notquad in visited_not_quads:
+    #    visited_faces_id.add(notquad.index)
+    
+    # обходим перпендикулярные
+    for loop in edge_ring:
+
+        # выбор перпендикулярного ребра
+        #edge = loop.link_loop_next.edge
+        #faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross(edge, visited_faces_id)
+        loop_start = loop.link_loop_next
+        faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner, visited_not_quads_inner = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop_inside_borders(loop_start, visited_faces_id, accessable_faces_id)
        
         for face in faces_in_loop_inner:
             visited_faces_id.add(face.index)
@@ -1000,6 +1188,8 @@ def convert_to_curve_all_strokemesh(name: str, index_start: int, count: int, mes
     for index in range(index_start, count):
         # получить stroke obj по имени
         stroke_obj_next = bpy.data.objects[name + str(index)]
+        if (len(stroke_obj_next.data.edges) == 0):
+            continue
         # Конвертирование накопителя строк в кривую
         convert_mesh_to_curve_and_make_poly(stroke_obj_next, current_obj)
         # переключение на OBJECT MODE
@@ -1807,6 +1997,7 @@ def read_start_edge_and_ignore_selected_border_edges(bm: BMesh, layer_name: str)
     
     if layer_name not in bm.edges.layers.int:
         print("read start edge and ignore selected bordger: layer-border not found")
+        edge_group_layer = bm.edges.layers.int.new(layer_name)
     else:
         edge_group_layer =  bm.edges.layers.int[layer_name]
 
@@ -1854,13 +2045,255 @@ def get_faces_accessable_from_edge(start_edge: BMEdge, bound_edges_id: set):
                 not_visited_connected_faces.append(connected_face)
     return visited_faces
 
-# одна петля без перпендикуляров
-
-def collect_loop_nocross_borders():
-    return
-
-#def test_collect_loop_nocross_borders(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord)
+# одна петля без перпендикуляров внутри границ
+def test_collect_loop_nocross_inside_borders(MESH_NAME_WITH_IDX: str, Z_STEP: float, COL_NAME: str, Z_COORD_START: int, layer_name: str):
+    # --- --- --- --- --- prepare
+     #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
     
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    name = MESH_NAME_WITH_IDX
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name, COL_NAME)
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
+
+    selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
+    starting_edge: BMEdge = selected_edges[0]
+    starting_loop = starting_edge.link_loops[0]
+
+    ####################################
+
+    visited_faces_id = set()
+    accessable_faces = get_faces_accessable_from_edge(starting_edge, border_edges_id)
+    accessable_faces_id = [face.index for face in accessable_faces]
+
+    # обход с остановкой на посещенных гранях
+    (faces_in_loop, edge_ring, idx_change_dir, visited_not_quads) = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop_inside_borders(starting_loop, visited_faces_id, accessable_faces_id)
+    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, idx_change_dir, Z_STEP * Z_COORD_START, bm, strokes_bm, edge_ring)
+    for id in visited_faces_id:
+        bm.faces[id].select = True
+
+    #######################################
+    # --- --- --- --- --- clean
+
+ #   output_not_visited_faces(bm, visited_faces_id)
+
+    # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+
+    # очистка памяти от bm
+    bm.free()
+    strokes_bm.free()
+
+# вызов одного обхода со сбором перпендикуляров внутри границ, без автозаполнения
+def test_loops_for_loop_nocross_inside_borders(MESH_NAME_WITH_IDX: str, Z_STEP: float, COL_NAME: str, Z_COORD_START: int, layer_name: str):
+    # --- --- --- --- --- prepare
+     #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+    
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    name = MESH_NAME_WITH_IDX
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name, COL_NAME)
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
+
+    selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
+    starting_edge: BMEdge = selected_edges[0]
+    starting_loop = starting_edge.link_loops[0]
+
+    ####################################
+    
+    visited_faces_id = set()
+    accessable_faces = get_faces_accessable_from_edge(starting_edge, border_edges_id)
+    accessable_faces_id = [face.index for face in accessable_faces]
+
+    # горизонтальное кольцо
+    result = loops_for_loop_by_edge_nocross_concrete_loop_inside_border(starting_loop, visited_faces_id, accessable_faces_id)
+    # перпендикуляры
+    for idx, item in enumerate(result):
+        (faces_in_loop, loops, change_direction_face) = item
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*Z_COORD_START, bm, strokes_bm, loops)
+        Z_COORD_START += 1
+    for id in visited_faces_id:
+        bm.faces[id].select = True
+
+    #######################################
+    # --- --- --- --- --- clean
+
+ #   output_not_visited_faces(bm, visited_faces_id)
+
+    # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+
+    # очистка памяти от bm
+    bm.free()
+    strokes_bm.free()
+
+def strokes_nocross_inside_border(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, accessable_faces_id: Set[int]):
+    '''
+    Фнукция вызывает один сбор перпендикулярных ребер + построение отдельного strokemesh по собранным петлям
+    Также производит очистку памяти и обновление strokemesh на экране
+    !! Изменяет значение z_coord и index
+    Возвращает индексы всех посещенных граней-квад
+
+    name - базовое имя всех strokemesh
+    index - номер меша
+    z_coord - сдвиг по z для направляющих в strokemesh
+    startloop - с какой лупы начинается обход
+    bm - модель, для которой строится strokemesh
+    '''
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
+    index += 1
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
+
+    # запуск от заданного ребра
+    # TODO: здесь лупа для обхода выбирается случайно из 2 луп данного ребра!
+    result = loops_for_loop_by_edge_nocross_concrete_loop_inside_border(start_loop, visited_faces_id, accessable_faces_id)
+    for idx, item in enumerate(result):
+        (faces_in_loop, loops, change_direction_face) = item
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm, loops)
+        z_coord += 1
+    #for id in visited_faces_id:
+    #    bm.faces[id].select = True
+
+    # TODO: это для дебага в основном
+    for id in visited_faces_id:
+        bm.faces[id].select = True
+
+    # очистка памяти и обновление StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+    strokes_bm.free()
+
+    return visited_faces_id, index, z_coord
+
+def choose_loop_inside_border(not_visited_face_id: List[int], bm: BMesh, border_edges_id: Set[int]):
+    '''
+    Функция выбора следующей стартовой лупы для автозаполнения
+    Выбор из непосещенных граней
+    Выбирается случайная грань и ее первая лупа в списке
+    '''
+    # TODO выбор ориентации по какому-то признаку?    
+    loop = None
+    isolated_face_id = -1
+    for face_id in not_visited_face_id:
+        for lo in bm.faces[face_id].loops:
+            if lo.edge.index not in border_edges_id:
+                loop = lo
+                return loop, isolated_face_id
+        if loop == None:
+            isolated_face_id = face_id
+            print("Found isolated by borders single face!!! FACE " + str(face_id))
+    return None, isolated_face_id
+
+def auto_strokes_nocross_inside_borders(bm: BMesh, start_loop: BMLoop, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str, border_edges_id: Set[id], accessable_faces_id: Set[int]):
+    '''
+    Функция для построения направляющих по всему мешу
+    Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
+    Запускает сбор перпендикулярных петель, пока не обойдет все вершины (учитываются только квады)
+    В базовом случае предлагается в качестве start_loop передавать сюда start_edge.link_loops[0]
+    Но может понадобиться более точнее управление
+    Каждый раз при выборе следующего ребра проверяет, чтобы ребро не было граничным, и пересчитывает допустимые грани в данной области
+    TODO: ситуацию улучшило бы если б мы один раз прошлись по всем граням, запустили там поиск допустимых областей, посчитали допустимые грани в зонах
+    записали зону в слой граней и не пересчитывали заново допустимые, а хранили их в списке где-нибудь
+    '''
+    
+    # все грани меша = непосещенные
+    not_visited_face_id = set() #set([face.index for face in bm.faces])
+    # выкинуть не квады
+    for face in bm.faces:
+        if is_quad(face):
+            not_visited_face_id.add(face.index)
+
+    #count_not_visited_start = len(not_visited_face_id)
+
+    index = MESH_NAME_IDX_START
+    z_coord = Z_COORD_START
+    name = MESH_NAME_BASE
+    visited_faces_id = set()
+
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
+
+    (visited_faces_id, index, z_coord) = strokes_nocross_inside_border(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+    not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
+
+
+    # пока непосещенные не пусты:
+    while len(not_visited_face_id) > 0:
+    # выбрать из непосещенных граней одну, взять конкретную лупу / попросить ввести (?)
+    # выбор среди не граничных луп!
+        loop_next, isolated_face_idx = choose_loop_inside_border(not_visited_face_id, bm, border_edges_id)
+        if (loop_next == None):
+            not_visited_face_id = not_visited_face_id.difference(set({isolated_face_idx}))
+            continue
+        accessable_faces = get_faces_accessable_from_edge(loop_next.edge, border_edges_id)
+        accessable_faces_id = [face.index for face in accessable_faces]
+    # запустить обход из нее
+    # построить в отдельный strokemesh нужные вершины и цепь
+        (visited_faces_id, index, z_coord) = strokes_nocross_inside_border(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+    # обновить множество непосещенных граней
+        not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+
+    #    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+    print("not_visited_id: " + str(not_visited_face_id))
+          
+    # -- на данный момент вовне есть функция обхода всех StrokeMesh_i по именам, конвертирующая их в кривые :)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+    return index, name    
+
+# вызов автозаполнения nocross c конвертацией в кривые
+def test_auto_strokes_nocross_inside_borders(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str):
+    #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
+    starting_edge: BMEdge = selected_edges[0]
+    starting_loop = starting_edge.link_loops[0]
+    accessable_faces = get_faces_accessable_from_edge(starting_edge, border_edges_id)
+    accessable_faces_id = [face.index for face in accessable_faces]
+
+    # автозаполнение c границами
+    count, name = auto_strokes_nocross_inside_borders(bm, starting_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START, layer_name, border_edges_id, accessable_faces_id) 
+
+     # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # очистка памяти от bm
+    bm.free()
+
+# TODO: раскомментить потом!
+ #   convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
+
+def get_selected_faces_id(bm: BMesh):
+    selected_faces_id = []
+    for face in bm.faces:
+        if face.select:
+            selected_faces_id.append(face.index)
+    return selected_faces_id
 
 def test_learn_something():
       #--- EDIT MODE!
@@ -1883,12 +2316,13 @@ def test_learn_something():
     layer_name = "is_border_edge"
    # write_edges_to_layer(mesh_obj, bm, layer_name, edges_id)
    # return
-   # show_select_all_edges_from_layer(bm, layer_name)    
+    selected_faces_id = get_selected_faces_id(bm)
+    show_select_all_edges_from_layer(bm, layer_name)    
     
     #for e in edges_from_layer:
     #    bm.edges[e].select = True
    # edges_from_layer = get_edges_from_layer(mesh_obj, bm, layer_name)
-   # bmesh.update_edit_mesh(mesh_obj.data)
+    bmesh.update_edit_mesh(mesh_obj.data)
    # return
     #delete_edges_from_layer(mesh_obj, bm, layer_name, edges_from_layer)
     ####
@@ -1906,11 +2340,13 @@ def test_learn_something():
     # очистка памяти от bm
     bm.free()
 
+
 def main():
     ######## главные параметры для создания строкмешей!
     COLLECTION_NAME_BASE = "TestCol_"
     STROKEMESH_NAME_BASE = "StrokesMesh_"
     Z_STEP = 0.1
+    LAYER_NAME_EDGE_IS_BORDER = "is_border_edge"
 
     last_col_idx = get_last_collection_index(COLLECTION_NAME_BASE)
     if (last_col_idx == -1):
@@ -1931,7 +2367,7 @@ def main():
     new_col_name = COLLECTION_NAME_BASE + str(last_col_idx + 1)
     new_strokemesh_idx_start = last_strokemesh_idx + 1
 
-    ####### вызовы ########
+    ####### без пересечений ########
 
     # одна петля без перпендикуляров
    # test_collect_loop_nocross(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord)
@@ -1943,6 +2379,8 @@ def main():
     # вычисление последних параметров создания мешей
     #test_getting_last_indexes()
 
+    ######## с симметрией
+
     # построение словаря симметричных граней
     #test_make_symmetry_dictionary()
 
@@ -1952,7 +2390,19 @@ def main():
     # автозаполнение с СИММЕТРИЕЙ для двух изолированных половин одной модели
     #test_auto_stroke_nocross_for_symmetry(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord)
 
-    test_learn_something()
+    ######## внутри границ
+
+    # одна петля без перпендикуляров внутри границ
+   # test_collect_loop_nocross_inside_borders(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER)
+    
+    # перпендикуляры внутри границ
+   # test_loops_for_loop_nocross_inside_borders(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER)
+  
+    # автозаполнение с границами
+    test_auto_strokes_nocross_inside_borders(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER)
+
+
+    #test_learn_something()
 
 if __name__ == "__main__":
     main()
