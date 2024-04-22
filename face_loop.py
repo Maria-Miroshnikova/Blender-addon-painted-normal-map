@@ -1698,7 +1698,7 @@ def test_loops_for_loop_by_edge_nocross_for_symmetry(MESH_NAME_BASE: str, MESH_I
   #  convert_mesh_to_curve_and_make_poly(strokes_obj, mesh_obj)    
     return
 
-# версия strokes_nocross для вызова на изолированных половинах симметричной модели
+# версия strokes_nocross для вызова СРАЗУ на ДВУХ изолированных половинах симметричной модели последовательно
 # TODO: 1) нет записи симметричных граней в посещенные
 # TODO: 2) строкмеш и симметричный строкмеш строятся друг за другом. Возможно, лучше было бы в отдельных папках!
 def strokes_nocross_for_symmetry(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, symm_dict: dict):
@@ -2093,20 +2093,25 @@ def test_collect_loop_nocross_inside_borders(MESH_NAME_WITH_IDX: str, Z_STEP: fl
     strokes_bm.free()
 
 # вызов одного обхода со сбором перпендикуляров внутри границ, без автозаполнения
-def test_loops_for_loop_nocross_inside_borders(MESH_NAME_WITH_IDX: str, Z_STEP: float, COL_NAME: str, Z_COORD_START: int, layer_name: str):
+def test_loops_for_loop_nocross_inside_borders_with_optional_symmetry(MESH_NAME_BASE: str, INDEX_START: int, Z_STEP: float, COL_NAME: str, Z_COORD_START: int, layer_name: str, with_symmetry: bool):
     # --- --- --- --- --- prepare
      #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
-    
+
+    if (with_symmetry):
+        symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
+    else:
+        symm_dict = {}
+
     # создаем объект, меш, привязываем к коллекции, все пустое.
     # это - будущий накопитель для кривых-петель-штрихов.
-    name = MESH_NAME_WITH_IDX
-    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name, COL_NAME)
-    strokes_mesh = strokes_obj.data
+    #name = MESH_NAME_WITH_IDX
+    #strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name, COL_NAME)
+    #strokes_mesh = strokes_obj.data
     # создает bmesh для него чтобы можно было добавлять точки.
-    strokes_bm = bmesh.new()
-    strokes_bm.from_mesh(strokes_mesh)
+    #strokes_bm = bmesh.new()
+    #strokes_bm.from_mesh(strokes_mesh)
 
     selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
     starting_edge: BMEdge = selected_edges[0]
@@ -2119,14 +2124,18 @@ def test_loops_for_loop_nocross_inside_borders(MESH_NAME_WITH_IDX: str, Z_STEP: 
     accessable_faces_id = [face.index for face in accessable_faces]
 
     # горизонтальное кольцо
-    result = loops_for_loop_by_edge_nocross_concrete_loop_inside_border(starting_loop, visited_faces_id, accessable_faces_id)
+    #result = loops_for_loop_by_edge_nocross_concrete_loop_inside_border(starting_loop, visited_faces_id, accessable_faces_id)
     # перпендикуляры
-    for idx, item in enumerate(result):
-        (faces_in_loop, loops, change_direction_face) = item
-        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*Z_COORD_START, bm, strokes_bm, loops)
-        Z_COORD_START += 1
-    for id in visited_faces_id:
-        bm.faces[id].select = True
+    #for idx, item in enumerate(result):
+    #    (faces_in_loop, loops, change_direction_face) = item
+    #    process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*Z_COORD_START, bm, strokes_bm, loops)
+    #    Z_COORD_START += 1
+    
+    # Для дебага
+    #for id in visited_faces_id:
+    #    bm.faces[id].select = True
+
+    (visited_faces_id, index, z_coord) = strokes_nocross_inside_border_with_optional_symmetry(MESH_NAME_BASE, INDEX_START, Z_COORD_START, starting_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, with_symmetry, symm_dict)
 
     #######################################
     # --- --- --- --- --- clean
@@ -2135,15 +2144,18 @@ def test_loops_for_loop_nocross_inside_borders(MESH_NAME_WITH_IDX: str, Z_STEP: 
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
+    
     # обновление point cloud на экране
-    strokes_bm.to_mesh(strokes_mesh)
-    strokes_obj.data.update()
+ #   strokes_bm.to_mesh(strokes_mesh)
+ #   strokes_obj.data.update()
 
     # очистка памяти от bm
     bm.free()
-    strokes_bm.free()
+ #   strokes_bm.free()
 
-def strokes_nocross_inside_border(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, accessable_faces_id: Set[int]):
+# эта функция возвращает result (всё о кольце с перпендикулярами) специально для последующего вызова ее симметричной версии
+# для себя все создает сама и убирает за собой
+def strokes_nocross_inside_border_partitial(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, accessable_faces_id: Set[int]):
     '''
     Фнукция вызывает один сбор перпендикулярных ребер + построение отдельного strokemesh по собранным петлям
     Также производит очистку памяти и обновление strokemesh на экране
@@ -2185,6 +2197,67 @@ def strokes_nocross_inside_border(name: str, index: int, z_coord: int, start_loo
     strokes_obj.data.update()
     strokes_bm.free()
 
+    return visited_faces_id, index, z_coord, result
+
+# специальная версия strokes_nocross для вызова в auto_strokes_nocross_inside_border
+# не делает обход, только отображает уже обойденные в strokes_nocross_inside_border грани
+# и строит точки в uv
+# подготавливает для этого strokemesh
+# записывает отраженные грани в visited
+# не работает с границами, т к подразумевается, что ее вызывают на корректном результате обычного stroke_mesh и для симметричной половины те же доступные грани
+# TODO: запись в посещенные вызывает дополнительный обход списка, а можно было вы в более низкой функции это проделывать на ходу обработки
+def strokes_nocross_symmetry_with_visited_recording_partitial(name: str, index: int, z_coord: int, result: List[Tuple[List[BMesh], List[BMLoop], int]], symm_dict: dict, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str):
+    '''
+    Функция принимает результат вызова обычного strokes_nocross_inside_border,
+    отображает грани на симметричные с помощью словаря symm_dict,
+    записывет их в посещенные (visited_faces_id) и строит точки и цепи в UV развертке на симметричных гранях
+
+    !!! создает strokemesh отдельный
+    !!! предполагается, что эту функцию вызывают в одной функции с обычным strokes_nocross_inside_border
+    '''
+    # создаем объект, меш, привязываем к коллекции, все пустое. ДЛЯ СИММЕТРИИ
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj_symm = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
+    index += 1
+    strokes_mesh_symm = strokes_obj_symm.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm_symm = bmesh.new()
+    strokes_bm_symm.from_mesh(strokes_mesh_symm)
+
+    # построение СИММЕТРИЧНОГО строкмеша
+    list_orto_rings_symm = loops_for_loop_by_edge_nocross_for_symmetry(result, symm_dict, bm)
+    for idx, item in enumerate(list_orto_rings_symm):
+        (faces_in_loop, loops, change_direction_face) = item
+        
+        # ЗАПИСЬ В ПОСЕЩЕННЫЕ
+        for face in faces_in_loop:
+            if (face.index in visited_faces_id):
+                print ("Symmetry call on visited faces!")
+                assert(True)
+            visited_faces_id.add(face.index)
+        
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm_symm, loops)
+        z_coord += 1
+
+    # очистка памяти и обновление СИММЕТРИЧНОГО StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm_symm.to_mesh(strokes_mesh_symm)
+    strokes_obj_symm.data.update()
+    strokes_bm_symm.free()
+
+    return visited_faces_id, index, z_coord
+
+def strokes_nocross_inside_border_with_optional_symmetry(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, accessable_faces_id: Set[int], with_symmetry: bool, symm_dict: dict = {}):
+    '''
+    Версия, которая сама вызывает симметричный обход после обычного обхода, если указано with_symmetry = true
+    '''
+    # вызов сбора кольца с перпендикулярами
+    visited_faces_id, index, z_coord, result = strokes_nocross_inside_border_partitial(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+
+    # вызов симметричного отображения
+    if (with_symmetry):
+        visited_faces_id, index, z_coord = strokes_nocross_symmetry_with_visited_recording_partitial(name, index, z_coord, result, symm_dict, bm, visited_faces_id, Z_STEP, COL_NAME)
+
     return visited_faces_id, index, z_coord
 
 def choose_loop_inside_border(not_visited_face_id: List[int], bm: BMesh, border_edges_id: Set[int]):
@@ -2206,8 +2279,13 @@ def choose_loop_inside_border(not_visited_face_id: List[int], bm: BMesh, border_
             print("Found isolated by borders single face!!! FACE " + str(face_id))
     return None, isolated_face_id
 
-def auto_strokes_nocross_inside_borders(bm: BMesh, start_loop: BMLoop, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str, border_edges_id: Set[id], accessable_faces_id: Set[int]):
+def auto_strokes_nocross_inside_borders_with_optional_symmetry(bm: BMesh, start_loop: BMLoop, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int,
+                                        Z_COORD_START: int, layer_name: str, border_edges_id: Set[id], accessable_faces_id: Set[int],
+                                        with_symmetry: bool, symm_dict: dict = {}):
     '''
+    !!!!!! не выбирать граничную грань в качестве стартовой!!
+    !!!!!! не выбирать грань на не кваде!!!!
+
     Функция для построения направляющих по всему мешу
     Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
     Запускает сбор перпендикулярных петель, пока не обойдет все вершины (учитываются только квады)
@@ -2217,7 +2295,7 @@ def auto_strokes_nocross_inside_borders(bm: BMesh, start_loop: BMLoop, Z_STEP: f
     TODO: ситуацию улучшило бы если б мы один раз прошлись по всем граням, запустили там поиск допустимых областей, посчитали допустимые грани в зонах
     записали зону в слой граней и не пересчитывали заново допустимые, а хранили их в списке где-нибудь
     '''
-    
+
     # все грани меша = непосещенные
     not_visited_face_id = set() #set([face.index for face in bm.faces])
     # выкинуть не квады
@@ -2235,10 +2313,12 @@ def auto_strokes_nocross_inside_borders(bm: BMesh, start_loop: BMLoop, Z_STEP: f
    # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
    # print("not_visited_id: " + str(not_visited_face_id))
 
-    (visited_faces_id, index, z_coord) = strokes_nocross_inside_border(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+    (visited_faces_id, index, z_coord) = strokes_nocross_inside_border_with_optional_symmetry(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, with_symmetry, symm_dict)
+    #(visited_faces_id, index, z_coord, result) = strokes_nocross_inside_border_partitial(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+    
     not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
 
-   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count _not_visited_start) + " visited: " + str(len(visited_faces_id)))
    # print("not_visited_id: " + str(not_visited_face_id))
 
 
@@ -2254,7 +2334,8 @@ def auto_strokes_nocross_inside_borders(bm: BMesh, start_loop: BMLoop, Z_STEP: f
         accessable_faces_id = [face.index for face in accessable_faces]
     # запустить обход из нее
     # построить в отдельный strokemesh нужные вершины и цепь
-        (visited_faces_id, index, z_coord) = strokes_nocross_inside_border(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+        (visited_faces_id, index, z_coord) = strokes_nocross_inside_border_with_optional_symmetry(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, with_symmetry, symm_dict)
+        #(visited_faces_id, index, z_coord, result) = strokes_nocross_inside_border_partitial(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
     # обновить множество непосещенных граней
         not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
 
@@ -2266,10 +2347,15 @@ def auto_strokes_nocross_inside_borders(bm: BMesh, start_loop: BMLoop, Z_STEP: f
     return index, name    
 
 # вызов автозаполнения nocross c конвертацией в кривые
-def test_auto_strokes_nocross_inside_borders(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str):
+def test_auto_strokes_nocross_inside_borders(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str, with_symmetry: bool):
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    if (with_symmetry):
+        symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
+    else:
+        symm_dict = {}
 
     selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
     starting_edge: BMEdge = selected_edges[0]
@@ -2278,7 +2364,7 @@ def test_auto_strokes_nocross_inside_borders(Z_STEP: float, COL_NAME: str, MESH_
     accessable_faces_id = [face.index for face in accessable_faces]
 
     # автозаполнение c границами
-    count, name = auto_strokes_nocross_inside_borders(bm, starting_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START, layer_name, border_edges_id, accessable_faces_id) 
+    count, name = auto_strokes_nocross_inside_borders_with_optional_symmetry(bm, starting_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START, layer_name, border_edges_id, accessable_faces_id, with_symmetry, symm_dict) 
 
      # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
@@ -2287,6 +2373,30 @@ def test_auto_strokes_nocross_inside_borders(Z_STEP: float, COL_NAME: str, MESH_
 
 # TODO: раскомментить потом!
  #   convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
+
+def get_not_visited_start_faces_for_auto_with_symmetry_only_quads(start_loop: BMLoop, bm: BMesh):
+    positive_faces_id = set()
+    negative_faces_id = set()
+    
+    for face in bm.faces:
+        if not (is_quad(face)):
+            continue
+        median: Vector = face.calc_center_median()
+        if (median.x > 0):
+            positive_faces_id.add(face.id)
+        else:
+            negative_faces_id.add(face.id)
+    # надеюсь, что не будет проблем с близостью к нулю....
+
+    # проверка на симметричность модели
+    assert(len(positive_faces_id) == len(negative_faces_id))
+
+    # определяем половину
+    start_median = start_loop.face.calc_center_median()
+    if (start_median.x > 0):
+        return positive_faces_id
+    else:
+        return negative_faces_id
 
 def get_selected_faces_id(bm: BMesh):
     selected_faces_id = []
@@ -2396,10 +2506,10 @@ def main():
    # test_collect_loop_nocross_inside_borders(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER)
     
     # перпендикуляры внутри границ
-   # test_loops_for_loop_nocross_inside_borders(STROKEMESH_NAME_BASE + str(new_strokemesh_idx_start), Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER)
+  #  test_loops_for_loop_nocross_inside_borders_with_optional_symmetry(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry=True)
   
     # автозаполнение с границами
-    test_auto_strokes_nocross_inside_borders(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER)
+    test_auto_strokes_nocross_inside_borders(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry = True)
 
 
     #test_learn_something()
