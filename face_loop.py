@@ -2011,6 +2011,167 @@ def read_start_edge_and_ignore_selected_border_edges(bm: BMesh, layer_name: str)
     return selected_edges, bordger_edges_id
 
 ####################################################
+# --- --- edit face layers
+
+# константы для слоя обозначения принадлежности грани строкмешу, которому соответствует данный слой
+BELONGS_TO_STROKEMESH = 1
+NOT_BELONG_TO_STROKEMESH = -1
+
+# НЕ ИСПОЛЬЗУЕТСЯ (не работает удаление слоев). Вместо этого - работа с файлом, см. 4 функции ниже
+def write_faces_to_layer(bm: BMesh, layer_name: str, faces_id: List[int]):
+    '''
+    layer_name = имя слоя = имя strokemesh, в котором создается вершина в uv для данной грани face_id
+    функция должна вызываться каждый раз, когда грани используются для построения точек в uv развертке в строкмеше
+    '''
+    if layer_name not in bm.faces.layers.int:
+        strokemesh_layer = bm.faces.layers.int.new(layer_name)
+    else:
+        strokemesh_layer =  bm.faces.layers.int[layer_name]
+
+    for f in faces_id:
+        bm.faces[f][strokemesh_layer] = BELONGS_TO_STROKEMESH
+
+# НЕ ИСПОЛЬЗУЕТСЯ. Вместо этого - работа с файлом, см. 4 функции ниже
+# почему-то эта функция уничтожает вершины когда удаляет слой
+# не могу выяснить, как удалять слой без удаления вершин, поэтому
+def recalculate_strokemesh_layers(bm: BMesh, strokemesh_name_base: str):
+    '''
+    Функция пересчитывает слои граней, связанные со строкмешами
+    - Удаляем слои граней, соответствующие несуществующим сейчас строкмешам
+    - Устанавливает видимость строкмешей
+    - Возвращает множество id граней, которые используются в видимых строкмешах
+
+    Функция нужна, чтобы можно было вызывать постройку строкмешей для граней, которые уже используются в других мешах,
+    но все их меши невидимы.
+
+    !!! Не вызывать функцию до того, как будет настроено создание слоев строкмешей для граней
+    '''
+    strokemesh_dict = {} # strokemesh_name : visibility
+    #visible_names = set()
+    
+    # определяем, какие сейчас существуют строкмеши и их видимость
+    for o in context.view_layer.objects:
+        if strokemesh_name_base not in o.name:
+                continue
+        # видимые
+        #if o.hide_viewport or o.visible_get():
+            #visible_names.add(o.name)
+        strokemesh_dict[o.name] = (o.hide_viewport or o.visible_get())
+    
+    # определяем, какие существуют слои строкмешевые и ссылки на них
+    layer_dict = {} # слои, соответствующие существующим строкмешам
+    not_existing_strokemesh_layers = set()
+    #for strokemesh in strokemesh_dict.keys:
+    #    if strokemesh not in bm.faces.layers.int:
+    #        la
+    for layer in bm.faces.layers.int:
+        if strokemesh_name_base not in layer.name:
+            continue
+        # слой есть, а strokemesh нет (слой надо очистить)
+        if layer.name not in strokemesh_dict:
+            not_existing_strokemesh_layers.add(layer)
+        # слой есть и строкмеш есть
+        else:
+            layer_dict[layer.name] = layer
+        # слоя нет, а строкмеш есть - невозможно! Как только создается строкмеш, создается и слой
+        # TODO функция должна запускаться только после того, как введем создание слоев при создании строкмешей
+    
+    # удаляем слои от несуществующих strokemesh
+    # больше никакой очистки/переписывания не нужно!
+    for layer in not_existing_strokemesh_layers:
+        print("remove layer: " + str(layer.name))
+        bm.faces.layers.int.remove(layer)
+
+    used_faces_id = set()
+    # переписываем слои для каждой грани и запоминаем занятые грани
+    for face in bm.faces:
+        for layer_name in layer_dict.values():
+            layer = layer_dict[layer_name]
+            # если грань используется в слое и слой видимый
+            if (face[layer] == BELONGS_TO_STROKEMESH) and (strokemesh_dict[layer_name]):
+                used_faces_id.add(face.index)
+
+    return used_faces_id
+
+import json
+
+def read_layers_file_to_dictionary(file_name):
+    
+    #strokemesh_layers_dict = {}
+    with open(file_name) as f:
+        layers = json.load(f)
+    #print(layers)
+    #for layer in layers.items():
+    #    print(section)
+    #    print('\n'.join(commands))
+    return layers
+
+# работает из с невидимостью меша, и с невидимостью целой коллекции! 
+def recalculate_strokemesh_layers_from_layer_dictionary(bm: BMesh, strokemesh_name_base: str, layer_dict: dict):
+    '''
+    файл:
+    строкмеш : список id_граней
+
+    строим строкмеш -> записываем все грани, можно даже не внутри проекции process
+    запускаем обход -> считываем словарь, удаляем из него строкмеши отсутствующие, определяем грани свободные -> записываем измененный словарь обратно в файл
+
+    Функция пересчитывает слои граней, связанные со строкмешами
+    - Удаляем слои граней, соответствующие несуществующим сейчас строкмешам
+    - Устанавливает видимость строкмешей
+    - Возвращает множество id граней, которые используются в видимых строкмешах
+
+    Функция нужна, чтобы можно было вызывать постройку строкмешей для граней, которые уже используются в других мешах,
+    но все их меши невидимы.
+
+    !!! Не вызывать функцию до того, как будет настроено создание слоев строкмешей для граней
+    '''
+    strokemesh_dict = {} # strokemesh_name : visibility
+    
+    # определяем, какие сейчас существуют строкмеши и их видимость
+    for o in context.view_layer.objects:
+        if strokemesh_name_base not in o.name:
+                continue
+        # видимые
+        strokemesh_dict[o.name] = (o.hide_viewport or o.visible_get())
+    
+    # определяем, какие существуют слои строкмешевые и ссылки на них
+    not_existing_strokemesh_layers = set()
+    for layer in layer_dict.keys():
+        # слой есть, а strokemesh нет (слой надо очистить)
+        if layer not in strokemesh_dict:
+            not_existing_strokemesh_layers.add(layer)
+        # слоя нет, а строкмеш есть - невозможно! Как только создается строкмеш, создается и слой
+        # TODO функция должна запускаться только после того, как введем создание слоев при создании строкмешей
+    
+    # удаляем слои от несуществующих strokemesh
+    # больше никакой очистки/переписывания не нужно!
+    for layer in not_existing_strokemesh_layers:
+        print("remove layer: " + str(layer))
+        layer_dict.pop(layer)
+
+    used_faces_id = set()
+
+    for layer_name in layer_dict.keys():
+        layer_faces_id = layer_dict[layer_name]
+        if (strokemesh_dict[layer_name]):
+            # все грани из видимого строкмеша - занятые!
+            used_faces_id.update(layer_faces_id)
+    return used_faces_id
+
+def write_faces_to_layer_dictionary(faces_id: List[int], strokemesh_name: str, layer_dict: dict):
+    if strokemesh_name in layer_dict:
+        current_faces_id = set(layer_dict[strokemesh_name])
+        current_faces_id.update(faces_id)
+        layer_dict[strokemesh_name] = list(current_faces_id)
+    else:
+        layer_dict[strokemesh_name] = faces_id
+
+def write_layer_dictionary_to_file(file_name, layer_dict):
+    with open(file_name, 'w') as f:
+        f.write(json.dumps(layer_dict))
+
+####################################################
+####################################################
 
 
 # BFS по граням
@@ -2374,29 +2535,273 @@ def test_auto_strokes_nocross_inside_borders(Z_STEP: float, COL_NAME: str, MESH_
 # TODO: раскомментить потом!
  #   convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
 
-def get_not_visited_start_faces_for_auto_with_symmetry_only_quads(start_loop: BMLoop, bm: BMesh):
-    positive_faces_id = set()
-    negative_faces_id = set()
+######################################
+
+# эта функция возвращает result (всё о кольце с перпендикулярами) специально для последующего вызова ее симметричной версии
+# для себя все создает сама и убирает за собой
+def strokes_nocross_inside_border_partitial_with_layers(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, accessable_faces_id: Set[int], layer_dict: dict):
+    '''
+    Фнукция вызывает один сбор перпендикулярных ребер + построение отдельного strokemesh по собранным петлям
+    Также производит очистку памяти и обновление strokemesh на экране
+    !! Изменяет значение z_coord и index
+    Возвращает индексы всех посещенных граней-квад
+
+    name - базовое имя всех strokemesh
+    index - номер меша
+    z_coord - сдвиг по z для направляющих в strokemesh
+    startloop - с какой лупы начинается обход
+    bm - модель, для которой строится strokemesh
+    '''
+
+    # запуск от заданного ребра
+    # TODO: здесь лупа для обхода выбирается случайно из 2 луп данного ребра!
+    result = loops_for_loop_by_edge_nocross_concrete_loop_inside_border(start_loop, visited_faces_id, accessable_faces_id)
+    if (len(result) == 0):
+        return visited_faces_id, index, z_coord, result
+
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
+    index += 1
+    strokes_mesh = strokes_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm = bmesh.new()
+    strokes_bm.from_mesh(strokes_mesh)
+
+    for idx, item in enumerate(result):
+        (faces_in_loop, loops, change_direction_face) = item
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm, loops)
+        #write_faces_to_layer(bm, name + str(index - 1), [face.index for face in faces_in_loop])
+        faces_id = [face.index for face in faces_in_loop]
+        write_faces_to_layer_dictionary(faces_id, name + str(index - 1), layer_dict)
+        z_coord += 1
+    #for id in visited_faces_id:
+    #    bm.faces[id].select = True
+
+    # TODO: это для дебага в основном
+    #for id in visited_faces_id:
+    #    bm.faces[id].select = True
+   # faces_in_layer = get_faces_from_layer(bm, name + str(index - 1))
+   # for id in faces_in_layer:
+   #     bm.faces[id].select = True
+
+
+    # очистка памяти и обновление StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm.to_mesh(strokes_mesh)
+    strokes_obj.data.update()
+    strokes_bm.free()
+
+    return visited_faces_id, index, z_coord, result
+
+def strokes_nocross_symmetry_with_visited_recording_partitial_with_layers(name: str, index: int, z_coord: int, result: List[Tuple[List[BMesh], List[BMLoop], int]], symm_dict: dict, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, layer_dict: dict):
+    '''
+    Функция принимает результат вызова обычного strokes_nocross_inside_border,
+    отображает грани на симметричные с помощью словаря symm_dict,
+    записывет их в посещенные (visited_faces_id) и строит точки и цепи в UV развертке на симметричных гранях
+
+    !!! создает strokemesh отдельный
+    !!! предполагается, что эту функцию вызывают в одной функции с обычным strokes_nocross_inside_border
+    '''
+    if (len(result) == 0):
+        return visited_faces_id, index, z_coord
     
-    for face in bm.faces:
-        if not (is_quad(face)):
-            continue
-        median: Vector = face.calc_center_median()
-        if (median.x > 0):
-            positive_faces_id.add(face.id)
-        else:
-            negative_faces_id.add(face.id)
-    # надеюсь, что не будет проблем с близостью к нулю....
+    # создаем объект, меш, привязываем к коллекции, все пустое. ДЛЯ СИММЕТРИИ
+    # это - будущий накопитель для кривых-петель-штрихов.
+    strokes_obj_symm = make_new_obj_with_empty_mesh_with_unique_name_in_scene(name + str(index), COL_NAME)
+    index += 1
+    strokes_mesh_symm = strokes_obj_symm.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    strokes_bm_symm = bmesh.new()
+    strokes_bm_symm.from_mesh(strokes_mesh_symm)
 
-    # проверка на симметричность модели
-    assert(len(positive_faces_id) == len(negative_faces_id))
+    # построение СИММЕТРИЧНОГО строкмеша
+    list_orto_rings_symm = loops_for_loop_by_edge_nocross_for_symmetry(result, symm_dict, bm)
+    for idx, item in enumerate(list_orto_rings_symm):
+        (faces_in_loop, loops, change_direction_face) = item
+        
+        # ЗАПИСЬ В ПОСЕЩЕННЫЕ
+        for face in faces_in_loop:
+            if (face.index in visited_faces_id):
+                print ("Symmetry call on visited faces!")
+                assert(True)
+            visited_faces_id.add(face.index)
+        
+        process_faces_from_loop_with_island_connectivity_em(faces_in_loop, change_direction_face, Z_STEP*z_coord, bm, strokes_bm_symm, loops)
+        faces_id = [face.index for face in faces_in_loop]
+        write_faces_to_layer_dictionary(faces_id, name + str(index - 1), layer_dict)
+        z_coord += 1
 
-    # определяем половину
-    start_median = start_loop.face.calc_center_median()
-    if (start_median.x > 0):
-        return positive_faces_id
+    # очистка памяти и обновление СИММЕТРИЧНОГО StrokeMesh на экране
+    # обновление point cloud на экране
+    strokes_bm_symm.to_mesh(strokes_mesh_symm)
+    strokes_obj_symm.data.update()
+    strokes_bm_symm.free()
+
+    return visited_faces_id, index, z_coord
+
+def strokes_nocross_inside_border_with_optional_symmetry_with_layers(name: str, index: int, z_coord: int, start_loop: BMLoop, bm: BMesh, visited_faces_id: set, Z_STEP: float, COL_NAME: str, accessable_faces_id: Set[int], layer_dict: dict, with_symmetry: bool, symm_dict: dict = {}):
+    '''
+    Версия, которая сама вызывает симметричный обход после обычного обхода, если указано with_symmetry = true
+    '''
+    # вызов сбора кольца с перпендикулярами
+    visited_faces_id, index, z_coord, result = strokes_nocross_inside_border_partitial_with_layers(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, layer_dict)
+
+    # вызов симметричного отображения
+    if (with_symmetry):
+        visited_faces_id, index, z_coord = strokes_nocross_symmetry_with_visited_recording_partitial_with_layers(name, index, z_coord, result, symm_dict, bm, visited_faces_id, Z_STEP, COL_NAME, layer_dict)
+
+    return visited_faces_id, index, z_coord
+
+
+# вызов одного обхода со сбором перпендикуляров внутри границ, без автозаполнения
+def test_loops_for_loop_nocross_inside_borders_auto_visited(MESH_NAME_BASE: str, INDEX_START: int, Z_STEP: float, COL_NAME: str, Z_COORD_START: int, layer_name: str, layer_file_name: str, with_symmetry: bool):
+    # --- --- --- --- --- prepare
+     #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    if (with_symmetry):
+        symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
     else:
-        return negative_faces_id
+        symm_dict = {}
+
+    selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
+    starting_edge: BMEdge = selected_edges[0]
+    starting_loop = starting_edge.link_loops[0]
+
+    ####################################
+    
+    file_name = layer_file_name
+    layers_dict = read_layers_file_to_dictionary(file_name)
+    visited_faces_id = recalculate_strokemesh_layers_from_layer_dictionary(bm, MESH_NAME_BASE, layers_dict) # recalculate_strokemesh_layers(bm, MESH_NAME_BASE)
+  #  print("---- visited faces at start: ")
+  #  print(visited_faces_id)
+  #  print("----")
+
+    #bm.to_mesh(mesh_obj.data)
+    #bm.free()
+    #mesh_obj.data.update()
+    
+   # bm.faces.ensure_lookup_table()
+    #bmesh.update_edit_mesh(mesh_obj.data)
+    #bm = bmesh.from_edit_mesh(mesh_obj.data)
+    
+    accessable_faces = get_faces_accessable_from_edge(starting_edge, border_edges_id)
+    accessable_faces_id = [face.index for face in accessable_faces]
+
+    (visited_faces_id, index, z_coord, result) = strokes_nocross_inside_border_with_optional_symmetry_with_layers(MESH_NAME_BASE, INDEX_START, Z_COORD_START, starting_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, layers_dict, with_symmetry, symm_dict)
+
+    #######################################
+    # --- --- --- --- --- clean
+
+    write_layer_dictionary_to_file(file_name, layers_dict)
+
+    # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+
+    # очистка памяти от bm
+    bm.free()
+
+def auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm: BMesh, start_loop: BMLoop, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int,
+                                        Z_COORD_START: int, layer_name: str, border_edges_id: Set[id], accessable_faces_id: Set[int],
+                                        layer_dict: dict, with_symmetry: bool, symm_dict: dict = {}):
+    '''
+    !!!!!! не выбирать граничную грань в качестве стартовой!!
+    !!!!!! не выбирать грань на не кваде!!!!
+
+    Функция для построения направляющих по всему мешу
+    Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
+    Запускает сбор перпендикулярных петель, пока не обойдет все вершины (учитываются только квады)
+    В базовом случае предлагается в качестве start_loop передавать сюда start_edge.link_loops[0]
+    Но может понадобиться более точнее управление
+    Каждый раз при выборе следующего ребра проверяет, чтобы ребро не было граничным, и пересчитывает допустимые грани в данной области
+    TODO: ситуацию улучшило бы если б мы один раз прошлись по всем граням, запустили там поиск допустимых областей, посчитали допустимые грани в зонах
+    записали зону в слой граней и не пересчитывали заново допустимые, а хранили их в списке где-нибудь
+    '''
+
+    # все грани меша = непосещенные
+    not_visited_face_id = set() #set([face.index for face in bm.faces])
+    # выкинуть не квады
+    for face in bm.faces:
+        if is_quad(face):
+            not_visited_face_id.add(face.index)
+
+    #count_not_visited_start = len(not_visited_face_id)
+
+    index = MESH_NAME_IDX_START
+    z_coord = Z_COORD_START
+    name = MESH_NAME_BASE
+    visited_faces_id = recalculate_strokemesh_layers_from_layer_dictionary(bm, MESH_NAME_BASE, layer_dict) #set()
+
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
+
+    (visited_faces_id, index, z_coord) = strokes_nocross_inside_border_with_optional_symmetry_with_layers(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, layer_dict,  with_symmetry, symm_dict)
+    #(visited_faces_id, index, z_coord, result) = strokes_nocross_inside_border_partitial(name, index, z_coord, start_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+    
+    not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+   # print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count _not_visited_start) + " visited: " + str(len(visited_faces_id)))
+   # print("not_visited_id: " + str(not_visited_face_id))
+
+
+    # пока непосещенные не пусты:
+    while len(not_visited_face_id) > 0:
+    # выбрать из непосещенных граней одну, взять конкретную лупу / попросить ввести (?)
+    # выбор среди не граничных луп!
+        loop_next, isolated_face_idx = choose_loop_inside_border(not_visited_face_id, bm, border_edges_id)
+        if (loop_next == None):
+            not_visited_face_id = not_visited_face_id.difference(set({isolated_face_idx}))
+            continue
+        accessable_faces = get_faces_accessable_from_edge(loop_next.edge, border_edges_id)
+        accessable_faces_id = [face.index for face in accessable_faces]
+    # запустить обход из нее
+    # построить в отдельный strokemesh нужные вершины и цепь
+        (visited_faces_id, index, z_coord) = strokes_nocross_inside_border_with_optional_symmetry_with_layers(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, layer_dict, with_symmetry, symm_dict)
+        #(visited_faces_id, index, z_coord, result) = strokes_nocross_inside_border_partitial(name, index, z_coord, loop_next, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id)
+    # обновить множество непосещенных граней
+        not_visited_face_id = not_visited_face_id.difference(visited_faces_id)
+
+
+    #    print("index = " + str(index) + " not_visited: " + str(len(not_visited_face_id)) + "/" + str(count_not_visited_start) + " visited: " + str(len(visited_faces_id)))
+    print("not_visited_id: " + str(not_visited_face_id))
+          
+    # -- на данный момент вовне есть функция обхода всех StrokeMesh_i по именам, конвертирующая их в кривые :)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+    return index, name    
+
+# вызов автозаполнения nocross c конвертацией в кривые
+def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str, with_symmetry: bool, layer_file_name: str):
+    #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+    if (with_symmetry):
+        symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
+    else:
+        symm_dict = {}
+
+    selected_edges, border_edges_id = read_start_edge_and_ignore_selected_border_edges(bm, layer_name)
+    starting_edge: BMEdge = selected_edges[0]
+    starting_loop = starting_edge.link_loops[0]
+    accessable_faces = get_faces_accessable_from_edge(starting_edge, border_edges_id)
+    accessable_faces_id = [face.index for face in accessable_faces]
+
+    file_name = layer_file_name
+    layer_dict = read_layers_file_to_dictionary(file_name)
+
+    # автозаполнение c границами
+    count, name = auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm, starting_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START, layer_name, border_edges_id, accessable_faces_id, layer_dict, with_symmetry, symm_dict) 
+
+    write_layer_dictionary_to_file(file_name, layer_dict)
+
+     # обновление объекта на экране
+    bmesh.update_edit_mesh(mesh_obj.data)
+    # очистка памяти от bm
+    bm.free()
+
+# TODO: раскомментить потом!
+ #   convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
 
 def get_selected_faces_id(bm: BMesh):
     selected_faces_id = []
@@ -2410,6 +2815,8 @@ def test_learn_something():
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
 
+    print(recalculate_strokemesh_layers(bm, "", "StrokesMesh_"))
+    return
     # работает со сменой половины!
     #bpy.ops.mesh.loop_to_region(select_bigger=True)
 
@@ -2457,6 +2864,7 @@ def main():
     STROKEMESH_NAME_BASE = "StrokesMesh_"
     Z_STEP = 0.1
     LAYER_NAME_EDGE_IS_BORDER = "is_border_edge"
+    STROKEMESH_LAYERS_FILE_NAME = "strokemesh_layers.json"
 
     last_col_idx = get_last_collection_index(COLLECTION_NAME_BASE)
     if (last_col_idx == -1):
@@ -2509,10 +2917,14 @@ def main():
   #  test_loops_for_loop_nocross_inside_borders_with_optional_symmetry(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry=True)
   
     # автозаполнение с границами
-    test_auto_strokes_nocross_inside_borders(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry = True)
+   # test_auto_strokes_nocross_inside_borders(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry = True)
 
+    with_symmetry = True
+    #test_loops_for_loop_nocross_inside_borders_auto_visited(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, STROKEMESH_LAYERS_FILE_NAME, with_symmetry)
+   
+    test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry, STROKEMESH_LAYERS_FILE_NAME)
 
-    #test_learn_something()
+   # test_learn_something()
 
 if __name__ == "__main__":
     main()
