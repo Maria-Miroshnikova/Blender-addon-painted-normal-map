@@ -1087,10 +1087,11 @@ def test_loops_for_loop_nocross_inside_borders_auto_visited(MESH_NAME_BASE: str,
 
 def auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm: BMesh, start_loop: BMLoop, Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int,
                                         Z_COORD_START: int, layer_name: str, border_edges_id: Set[id], accessable_faces_id: Set[int],
-                                        layer_dict: dict, with_symmetry: bool, symm_dict: dict = {}):
+                                        layer_dict: dict, only_inside_border: bool, with_symmetry: bool, symm_dict: dict = {}):
     '''
     !!!!!! не выбирать граничную грань в качестве стартовой!!
     !!!!!! не выбирать грань на не кваде!!!!
+    only_inside_border = вызов автообхода только внутри стартовой области внутри границ
 
     Функция для построения направляющих по всему мешу
     Начинает с конкретного ребра, далее выбирает случайное ребро среди ребер непосещенных граней
@@ -1102,12 +1103,21 @@ def auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm: B
     записали зону в слой граней и не пересчитывали заново допустимые, а хранили их в списке где-нибудь
     '''
 
-    # все грани меша = непосещенные
-    not_visited_face_id = set()
-    # выкинуть не квады
-    for face in bm.faces:
-        if is_quad(face):
-            not_visited_face_id.add(face.index)
+    # TODO: в этом месте вызывается поиск доступных граней и в первом вызове strokes_nocross этот вызов повторится. Можно оптимизировать.
+    if (only_inside_border):
+        accessable_faces = get_faces_accessable_from_edge(start_loop.edge, border_edges_id)
+        not_visited_face_id = set()
+        # выкинуть не квады
+        for face in accessable_faces:
+            if is_quad(face):
+                not_visited_face_id.add(face.index)
+    else:
+        # все грани меша = непосещенные
+        not_visited_face_id = set()
+        # выкинуть не квады
+        for face in bm.faces:
+            if is_quad(face):
+                not_visited_face_id.add(face.index)
 
     index = MESH_NAME_IDX_START
     z_coord = Z_COORD_START
@@ -1140,7 +1150,7 @@ def auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm: B
     return index, name    
 
 # вызов автозаполнения nocross c конвертацией в кривые
-def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str, with_symmetry: bool, layer_file_name: str):
+def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME: str, MESH_NAME_BASE: str, MESH_NAME_IDX_START: int, Z_COORD_START: int, layer_name: str, with_symmetry: bool, layer_file_name: str, only_inside_border: bool):
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
@@ -1160,7 +1170,7 @@ def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME:
     layer_dict = read_layers_file_to_dictionary(file_name)
 
     # автозаполнение c границами
-    count, name = auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm, starting_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START, layer_name, border_edges_id, accessable_faces_id, layer_dict, with_symmetry, symm_dict) 
+    count, name = auto_strokes_nocross_inside_borders_with_optional_symmetry_with_layers(bm, starting_loop, Z_STEP, COL_NAME, MESH_NAME_BASE, MESH_NAME_IDX_START, Z_COORD_START, layer_name, border_edges_id, accessable_faces_id, layer_dict, only_inside_border, with_symmetry, symm_dict) 
 
     write_layer_dictionary_to_file(file_name, layer_dict)
 
@@ -1169,7 +1179,7 @@ def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME:
     # очистка памяти от bm
     bm.free()
 
-    convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)  
+    convert_to_curve_all_strokemesh(name, MESH_NAME_IDX_START, count, mesh_obj)
 
 def get_selected_faces_id(bm: BMesh):
     selected_faces_id = []
@@ -1256,9 +1266,10 @@ def main():
 
     #with_symmetry = True
     with_symmetry = False
-    test_loops_for_loop_nocross_inside_borders_auto_visited(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, STROKEMESH_LAYERS_FILE_NAME, with_symmetry)
-   
-   # test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry, STROKEMESH_LAYERS_FILE_NAME)
+   # test_loops_for_loop_nocross_inside_borders_auto_visited(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, STROKEMESH_LAYERS_FILE_NAME, with_symmetry)
+    
+    only_inside_border = False
+    test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord, LAYER_NAME_EDGE_IS_BORDER, with_symmetry, STROKEMESH_LAYERS_FILE_NAME, only_inside_border)
 
    # test_learn_something()
 
