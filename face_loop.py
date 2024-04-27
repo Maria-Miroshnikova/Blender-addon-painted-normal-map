@@ -892,8 +892,6 @@ def write_layer_dictionary_to_file(file_name, layer_dict):
         f.write(json.dumps(layer_dict))
 
 ####################################################
-####################################################
-
 
 # BFS по граням
 def get_faces_accessable_from_edge(start_edge: BMEdge, bound_edges_id: set):
@@ -1068,7 +1066,6 @@ def test_loops_for_loop_nocross_inside_borders_auto_visited(MESH_NAME_BASE: str,
     starting_edge: BMEdge = selected_edges[0]
     starting_loop = starting_edge.link_loops[0]
 
-    ####################################
     
     file_name = layer_file_name
     layers_dict = read_layers_file_to_dictionary(file_name)
@@ -1079,8 +1076,6 @@ def test_loops_for_loop_nocross_inside_borders_auto_visited(MESH_NAME_BASE: str,
 
     (visited_faces_id, index, z_coord) = strokes_nocross_inside_border_with_optional_symmetry_with_layers(MESH_NAME_BASE, INDEX_START, Z_COORD_START, starting_loop, bm, visited_faces_id, Z_STEP, COL_NAME, accessable_faces_id, layers_dict, with_symmetry, symm_dict)
 
-    #######################################
-    # --- --- --- --- --- clean
 
     write_layer_dictionary_to_file(file_name, layers_dict)
 

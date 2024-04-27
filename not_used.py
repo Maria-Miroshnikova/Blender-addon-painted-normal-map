@@ -12,6 +12,7 @@ from bpy.types import Mesh, Object, Collection, VertexGroup, Curve
 from mathutils import Vector
 from typing import List, Tuple, Set
 from face_loop import *
+from old_versions import *
    
 ##################################
 # функции создания нового пустого объекта с пустым мешем без вертекс групп
@@ -493,3 +494,88 @@ if __name__ == "__main__":
 # для дебага из vscode....
 # может ломать результат в blender    
 #main()
+
+#########################################
+# --- --- edit face layers
+
+# константы для слоя обозначения принадлежности грани строкмешу, которому соответствует данный слой
+BELONGS_TO_STROKEMESH = 1
+NOT_BELONG_TO_STROKEMESH = -1
+
+# НЕ ИСПОЛЬЗУЕТСЯ (не работает удаление слоев). Вместо этого - работа с файлом, см. 4 функции ниже
+def write_faces_to_layer(bm: BMesh, layer_name: str, faces_id: List[int]):
+    '''
+    layer_name = имя слоя = имя strokemesh, в котором создается вершина в uv для данной грани face_id
+    функция должна вызываться каждый раз, когда грани используются для построения точек в uv развертке в строкмеше
+    '''
+    if layer_name not in bm.faces.layers.int:
+        strokemesh_layer = bm.faces.layers.int.new(layer_name)
+    else:
+        strokemesh_layer =  bm.faces.layers.int[layer_name]
+
+    for f in faces_id:
+        bm.faces[f][strokemesh_layer] = BELONGS_TO_STROKEMESH
+
+# НЕ ИСПОЛЬЗУЕТСЯ. Вместо этого - работа с файлом, см. 4 функции ниже
+# почему-то эта функция уничтожает вершины когда удаляет слой
+# не могу выяснить, как удалять слой без удаления вершин, поэтому
+def recalculate_strokemesh_layers(bm: BMesh, strokemesh_name_base: str):
+    '''
+    Функция пересчитывает слои граней, связанные со строкмешами
+    - Удаляем слои граней, соответствующие несуществующим сейчас строкмешам
+    - Устанавливает видимость строкмешей
+    - Возвращает множество id граней, которые используются в видимых строкмешах
+
+    Функция нужна, чтобы можно было вызывать постройку строкмешей для граней, которые уже используются в других мешах,
+    но все их меши невидимы.
+
+    !!! Не вызывать функцию до того, как будет настроено создание слоев строкмешей для граней
+    '''
+    strokemesh_dict = {} # strokemesh_name : visibility
+    #visible_names = set()
+    
+    # определяем, какие сейчас существуют строкмеши и их видимость
+    for o in context.view_layer.objects:
+        if strokemesh_name_base not in o.name:
+                continue
+        # видимые
+        #if o.hide_viewport or o.visible_get():
+            #visible_names.add(o.name)
+        strokemesh_dict[o.name] = (o.hide_viewport or o.visible_get())
+    
+    # определяем, какие существуют слои строкмешевые и ссылки на них
+    layer_dict = {} # слои, соответствующие существующим строкмешам
+    not_existing_strokemesh_layers = set()
+    #for strokemesh in strokemesh_dict.keys:
+    #    if strokemesh not in bm.faces.layers.int:
+    #        la
+    for layer in bm.faces.layers.int:
+        if strokemesh_name_base not in layer.name:
+            continue
+        # слой есть, а strokemesh нет (слой надо очистить)
+        if layer.name not in strokemesh_dict:
+            not_existing_strokemesh_layers.add(layer)
+        # слой есть и строкмеш есть
+        else:
+            layer_dict[layer.name] = layer
+        # слоя нет, а строкмеш есть - невозможно! Как только создается строкмеш, создается и слой
+        # TODO функция должна запускаться только после того, как введем создание слоев при создании строкмешей
+    
+    # удаляем слои от несуществующих strokemesh
+    # больше никакой очистки/переписывания не нужно!
+    for layer in not_existing_strokemesh_layers:
+        print("remove layer: " + str(layer.name))
+        bm.faces.layers.int.remove(layer)
+
+    used_faces_id = set()
+    # переписываем слои для каждой грани и запоминаем занятые грани
+    for face in bm.faces:
+        for layer_name in layer_dict.values():
+            layer = layer_dict[layer_name]
+            # если грань используется в слое и слой видимый
+            if (face[layer] == BELONGS_TO_STROKEMESH) and (strokemesh_dict[layer_name]):
+                used_faces_id.add(face.index)
+
+    return used_faces_id
+
+###########################################
