@@ -2,13 +2,21 @@ import bpy
 import bmesh
 from bmesh.types import BMEdge, BMFace, BMLoop, BMesh, BMLayerItem, BMVert
 from bpy import context
-#from face_loop import get_last_collection_index, get_last_strokemesh_index, get_last_z_coord
+#from face_loop import get_last_collection_index, get_last_strokemesh_index, get_last_z_coord, is_quad
 
 from typing import List, Set, Tuple
+
+# !!! edge flowloop = петля ребер, добавила flow- чтобы не путать петли ребер и механизм BMloop
 
 #####################################################################################################################################
 # --- скопировано вместо импорта.
 # TODO: починить импорт в блендере
+
+def is_quad(face: BMFace) -> bool:
+    '''
+    Функция проверяет, является ли данная грань четырехугольной
+    '''
+    return (len(face.loops) == 4)
 
 def get_last_collection_index(col_name: str):
     '''
@@ -71,7 +79,155 @@ def get_last_z_coord(last_mesh_name: str):
 
     return max_z
 
+# Версия функции loop_go_with_recording_visited_not_quads
+# останавливает сбор если встречает посещенную грань
+# TODO: по идее, проблем с цикличьностью и проверкой на посещенность не будет, ведь сверяем посещенность по visited_faces_id, а туда посещенные вершины записываются
+# во внешней функции, а не тут же
+def loop_go_with_recording_visited_not_quads_nocross(starting_loop: BMLoop, is_second_go: bool, visited_faces_id: Set[int], faces_first_go_id: Set[int] = []) -> (List[BMFace], List[BMLoop], bool, List[BMFace]):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад - останавливается
+    Возвращает список всех граней, вошедших в face loop при обходе в данном направлении
+    is_second_go нужен, чтобы при обходе в обратную сторону не добавлять первую грань еще раз в список
+    bool в возврате - это флаг того, цикличная дання петля или нет (то есть вернемся ли мы при обходе петли в ту грань, с которой обход начался)
+    visited_faces_id - уже известные до вызова этой функции грани, посещенные на других обходах
+    faces_first_go_id - посещенные на обходе в другую сторону грани, которые еще не занесли в глобальные посещенные грани visited_faces_id
+    '''
+    visited_not_quads = []
+    faces_in_loop = []
+    faces_in_loop_id = set() # нужно для отслеживание самопересечений во время ЭТОГО обхода
+    loops = []
+    loop = starting_loop
+    
+    if (not is_quad(loop.face)):
+        if (not is_second_go):
+            visited_not_quads.append(loop.face)
+        return [], [], False, visited_not_quads
+    # если это первый проход:
+    if (not is_second_go):
+        # если стартовая грань уже посещена - закончить обход
+        if (loop.face.index in visited_faces_id) or (loop.face.index in faces_first_go_id):
+            return [], [], False, visited_not_quads
+        faces_in_loop.append(loop.face)
+        faces_in_loop_id.add(loop.face.index)
+        loops.append(loop)
+    
+    radial_loop = loop.link_loop_radial_next
+    
+    # проверяем, что mesh оборвался (плоская поверхность)
+    #if (radial_loop.face == loop.face):
+    #    return faces_in_loop, loops, False, visited_not_quads
+    # проверяем, что mesh оборвался (плоская поверхность)
+    # проверка основана на том, что у грани с обрывом на внешнем ребре только 1 link_loops
+    if (radial_loop == loop):
+        return faces_in_loop, loops, False, visited_not_quads
+
+    # проверяем, следующая грань это квада? 
+    is_next_face_quad = is_quad(radial_loop.face)
+    if (not is_next_face_quad):
+        visited_not_quads.append(radial_loop.face)
+        # уперлись в не квадратную грань, конец обхода
+        return faces_in_loop, loops, False, visited_not_quads
+    else:
+        # если следующая грань уже посещена - закончить обход
+        # (посещена при обходе других петель / при обходе в другую сторону / при обходе в эту же строну)
+        if (radial_loop.face.index in visited_faces_id) or (radial_loop.face.index in faces_first_go_id) or (radial_loop.face.index in faces_in_loop_id):
+            return faces_in_loop, loops, False, visited_not_quads
+        # следующая грань не посещена, добавляем ее в инфу
+        faces_in_loop.append(radial_loop.face)
+        faces_in_loop_id.add(radial_loop.face.index)
+        if (is_second_go):
+            loops.append(radial_loop)
+        else:
+            loops.append(radial_loop.link_loop_next.link_loop_next)
+    next_loop = radial_loop.link_loop_next.link_loop_next
+    
+    # цикл прыжков для сбора всей лупы пока не упремся в не кваду или не вернемся в начальную (замкнутая лупа)
+    # или не закончится плоский меш
+    
+    loop = next_loop
+    while next_loop.edge != starting_loop.edge:
+        radial_loop = loop.link_loop_radial_next
+        next_loop = radial_loop.link_loop_next.link_loop_next
+        
+        # циклический меш
+        #if (next_loop.edge == starting_loop.edge):
+        #    break
+
+        # проверяем, что mesh оборвался (плоская поверхность)
+        #if (radial_loop.face == loop.face):
+         #   return faces_in_loop, loops, False, visited_not_quads
+        
+        # циклический меш
+        if (next_loop == starting_loop):
+            break
+
+        # проверяем, что mesh оборвался (плоская поверхность)
+        # проверка основана на том, что у грани с обрывом на внешнем ребре только 1 link_loops
+        if (radial_loop == loop):
+            return faces_in_loop, loops, False, visited_not_quads
+        
+        # проверяем, следующая грань это квада? 
+        is_next_face_quad = is_quad(radial_loop.face)
+        if (not is_next_face_quad):
+            visited_not_quads.append(radial_loop.face)
+            return faces_in_loop, loops, False, visited_not_quads
+        else:
+             # если следующая грань уже посещена - закончить обход
+             # (посещена при обходе других петель / при обходе в другую сторону / при обходе в эту же строну)
+            if (radial_loop.face.index in visited_faces_id) or (radial_loop.face.index in faces_first_go_id) or (radial_loop.face.index in faces_in_loop_id):
+                return faces_in_loop, loops, False, visited_not_quads
+            faces_in_loop.append(radial_loop.face)
+            faces_in_loop_id.add(radial_loop.face.index)
+            if (is_second_go):
+                loops.append(radial_loop)
+            else:
+                loops.append(radial_loop.link_loop_next.link_loop_next)
+
+ #       next_loop.edge.select = True
+        loop = next_loop
+    return faces_in_loop, loops, True, visited_not_quads
+
 #####################################################################################################################################
+# ---- переделанные функции из числа старых
+
+# Версия функции collect_face_loop_with_recording_visited_not_quads_nocross
+# принимает на вход конкретную лупу, т. к. в той версии при получении ребра можно было оказаться не на той грани, на которой задумано
+# останавливает сбор если встречает посещенную грань
+# может вернуть недействительный change_direction_face, если обход вызван из обойденной грани
+# 
+def collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(loop_start: BMLoop, visited_faces_id: Set[int]) -> (List[BMFace], List[BMLoop], int, List[BMFace], bool):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад/конец меша - меняет направление, попав снова - останавливается
+    Сначала идет только в одном направлении, затем в другую
+    Возвращает список всех граней, вошедших в face loop, и номер грани, с которой начался обход в другую сторону 
+    Если петля зациклена, возвращает -1 (надо соединить последнюю вершину с первой при создании кривой)
+    visited_faces_id - уже известные до вызова этой функции грани, посещенные на других обходах
+    '''
+    visited_not_quads = []
+    faces_in_loop = []
+    loops = []
+    #обход в одну сторону
+    loop = loop_start
+
+    faces_in_loop_one_direction, loops_one_direction, was_cycled_loop, visited_not_quads_one = loop_go_with_recording_visited_not_quads_nocross(loop, False, visited_faces_id)
+    faces_in_loop.extend(faces_in_loop_one_direction)
+    loops.extend(loops_one_direction)
+    visited_not_quads.extend(visited_not_quads_one)
+    change_direction_face = len(faces_in_loop) - 1
+    if (was_cycled_loop):
+        return (faces_in_loop, loops, -1, visited_not_quads, was_cycled_loop)
+    #обход в другую сторону, если не было цикла
+    loop = loop_start.link_loop_next.link_loop_next
+    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop, visited_not_quads_two = loop_go_with_recording_visited_not_quads_nocross(loop, True, visited_faces_id, set([face.index for face in faces_in_loop_one_direction]))
+    faces_in_loop.extend(faces_in_loop_two_direction)
+    loops.extend(loops_two_direction)
+    visited_not_quads.extend(visited_not_quads_two)
+    return (faces_in_loop, loops, change_direction_face, visited_not_quads, was_cycled_loop)
+
+#####################################################################################################################################
+# --- finding outlines/holes and concentric face loops around holes/outlines
 
 def is_pole(vert: BMVert):
     '''
@@ -79,7 +235,7 @@ def is_pole(vert: BMVert):
     '''
     return len(vert.link_edges) != 4
 
-def get_edge_flowloop_on_boundary_by_verts_and_bound_edges(start_vert: BMVert, visited_edges: Set[BMEdge]):
+def get_edge_flowloop_on_outline_by_verts_and_bound_edges(start_vert: BMVert, visited_edges: Set[BMEdge]):
     '''
     Функция "прыгает" от одной краевой вершины к другой по краевым ребрам между вершинами.
     Не зависит от наличия/отсутствия полюсов на краю.
@@ -137,6 +293,89 @@ def get_edge_flowloop_on_boundary_by_verts_and_bound_edges(start_vert: BMVert, v
         if (next_vert == start_vert):
             return flowloop_edges, True
         current_vert = next_vert
+
+def get_edges_for_all_outlines(bm: BMesh) -> List[List[BMEdge]]:
+    '''
+    Функция находит все края модели и ребра на этих краях. Для каждого отдельного "края" записывает ребра в список.
+    Возвращает список "краев", каждый из которых является списком ребер по этому краю.
+
+    гипотеза: краевые петли ребер всегда зациклены
+    гипотеза: не бывает пересечений с посещенными ребрами
+    '''
+
+    flowloops: List[List[BMEdge]] = []
+
+    visited_edges: Set[BMEdge] = set() 
+    visited_verts: Set[BMVert] = set()
+
+    # прыгаем по всем краевым вершинами
+    for vert in bm.verts:
+        if vert.is_boundary:
+            if vert in visited_verts:
+                continue
+            # собираем край из ребер, начиная с данной вершины
+            flowloop_edges, is_cycled = get_edge_flowloop_on_outline_by_verts_and_bound_edges(vert, visited_edges)
+            assert(is_cycled) # гипотеза про цикличность краев
+            # на всякий запоминаем посещенные ребра в общее множество
+            visited_edges = visited_edges.union(set(flowloop_edges))
+            flowloops.append(flowloop_edges)
+
+            # отдельно пробегаем собранные краевые ребра, достаем из них посещенные вершины и записываем
+            # их в общее множество, чтобы не делать вызов сбора края на посещенных вершинах
+            # TODO: можно было бы запоминать посещенные вершины еще в самой функции сбора края, не делая дополнительный проход
+            for edge in flowloop_edges:
+                for v in edge.verts:
+                    visited_verts.add(v)
+    return flowloops
+
+def find_maximum_concentric_faceloop_around_outline(bm: BMesh, outline: List[BMEdge]) -> List[Tuple[List[BMFace], List[BMLoop], int, List[BMFace]]]:
+    '''
+    Для данного края outline функция ищет максимальный набор концентрических петель.
+    Если петли найдены - возвращает результаты обхода этих петель функцией collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop
+    в виде списка результатов вызова для каждого кольца.
+    Последним в списке будет идти максимальное кольцо.
+
+    TODO: должны ли сюда приходить "посещенные" и должны ли запомненные тут посещенные передаваться вовне?
+    '''
+
+    # выбор ребра на краю (любое). Это - ребро для горизонтального кольца ребер
+    start_edge = outline[0]
+    
+    result_for_concentric_loops: List[Tuple[List[BMFace], List[BMLoop], int, List[BMFace]]] = []
+    visited_faces_id = set()
+
+    current_horiz_edge = start_edge
+    current_horiz_loop = start_edge.link_loops[0]
+    current_vertic_loop = current_horiz_loop.link_loop_next # т к начальное ребро - краевое, у него всего одна лупа.
+    current_face = current_horiz_loop.face
+    if (not is_quad(current_face)):
+        return result_for_concentric_loops
+
+    # обход горизонтального кольца ребер
+    while(True):
+        faces_in_loop, loops, idx_change_dir, visited_not_quads, was_cycled = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(current_vertic_loop, visited_faces_id)
+        if (not was_cycled): # не добавляем эту петлю к концентрическим, заканчиваем обход
+            break
+        
+        # запоминаем результат
+        faces_id = [face.index for face in faces_in_loop]
+        visited_faces_id = visited_faces_id.union(faces_id)
+        result_for_concentric_loops.append((faces_in_loop, loops, idx_change_dir, visited_not_quads))
+
+        # следующее ребро в горизонтальном кольце
+        next_horiz_loop = current_horiz_loop.link_loop_next.link_loop_next.link_loop_radial_next
+        current_horiz_loop = next_horiz_loop
+        if (current_horiz_loop.edge.is_boundary): # дошли до края
+            break
+        current_face = next_horiz_loop.face
+        if (not is_quad(current_face)):
+            break
+        current_vertic_loop = current_horiz_loop.link_loop_next.link_loop_radial_next
+
+    return result_for_concentric_loops
+
+###############################################################################################################################################################
+# --- creating regular grid with poles
 
 
 def get_edge_flowloop(edge_start: BMEdge, pole_start: BMVert, visited_edges: Set[BMEdge], verts_in_flowloops: Set[int]):
@@ -236,55 +475,29 @@ def get_grid_by_poles(bm: BMesh):
                 not_visited_pole_edges.add(edge)
     return poles_verts, grid_edges, not_visited_pole_edges
 
-def get_all_edge_boudaries_flowloops(bm: BMesh) -> List[List[BMEdge]]:
-    '''
-    Функция находит все края модели и ребра на этих краях. Для каждого отдельного "края" записывает ребра в список.
-    Возвращает список "краев", каждый из которых является списком ребер по этому краю.
-
-    гипотеза: краевые петли ребер всегда зациклены
-    гипотеза: не бывает пересечений с посещенными ребрами
-    '''
-
-    flowloops: List[List[BMEdge]] = []
-
-    visited_edges: Set[BMEdge] = set() 
-    visited_verts: Set[BMVert] = set()
-
-    # прыгаем по всем краевым вершинами
-    for vert in bm.verts:
-        if vert.is_boundary:
-            if vert in visited_verts:
-                continue
-            # собираем край из ребер, начиная с данной вершины
-            flowloop_edges, is_cycled = get_edge_flowloop_on_boundary_by_verts_and_bound_edges(vert, visited_edges)
-            assert(is_cycled) # гипотеза про цикличность краев
-            # на всякий запоминаем посещенные ребра в общее множество
-            visited_edges = visited_edges.union(set(flowloop_edges))
-            flowloops.append(flowloop_edges)
-
-            # отдельно пробегаем собранные краевые ребра, достаем из них посещенные вершины и записываем
-            # их в общее множество, чтобы не делать вызов сбора края на посещенных вершинах
-            # TODO: можно было бы запоминать посещенные вершины еще в самой функции сбора края, не делая дополнительный проход
-            for edge in flowloop_edges:
-                for v in edge.verts:
-                    visited_verts.add(v)
-    return flowloops
-
 def main():
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
 
-    # получение полюсной сетки
-    poles, edges, not_visited = get_grid_by_poles(bm)
-    for edge in edges:
-        edge.select = True
+    # --- получение полюсной сетки
+    #poles, edges, not_visited = get_grid_by_poles(bm)
+    #for edge in edges:
+    #    edge.select = True
 
-   # получение краевых границ
-   # flowloops = get_all_edge_boudaries_flowloops(bm)
+   # --- получение краевых границ
+    outlines = get_edges_for_all_outlines(bm)
    # for floop in flowloops:
    #     for edge in floop:
    #         edge.select = True
+
+    # --- поиск максимальных концентрических колец
+
+    result = find_maximum_concentric_faceloop_around_outline(bm, outlines[0])
+    for ring_data in result:
+        faces_in_loop, loops, idx_change_dir, visited_not_quads = ring_data
+        for face in faces_in_loop:
+            face.select = True
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
