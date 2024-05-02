@@ -344,8 +344,8 @@ def find_maximum_concentric_faceloop_around_outline(bm: BMesh, outline: List[BME
     result_for_concentric_loops: List[Tuple[List[BMFace], List[BMLoop], int, List[BMFace]]] = []
     visited_faces_id = set()
 
-    current_horiz_edge = start_edge
     current_horiz_loop = start_edge.link_loops[0]
+
     current_vertic_loop = current_horiz_loop.link_loop_next # т к начальное ребро - краевое, у него всего одна лупа.
     current_face = current_horiz_loop.face
     if (not is_quad(current_face)):
@@ -373,6 +373,161 @@ def find_maximum_concentric_faceloop_around_outline(bm: BMesh, outline: List[BME
         current_vertic_loop = current_horiz_loop.link_loop_next.link_loop_radial_next
 
     return result_for_concentric_loops
+
+def get_outlins_of_ring(current_horiz_loop: BMLoop, loops: List[BMLoop]) -> (List[BMLoop], List[BMLoop]):
+    '''
+    !!!!!! перед применением метода пересчитать нормали!!! из-за нормалей в разных полуплоскостях (неправильно определение внутренней и внешней стороны меша)
+    могут быть сбиты направления у BMloop!!!!
+    
+    Функция по набору loop ЦИКЛИЧНОГО вертикального кольца ищет ПОСЛЕДОВАТЕЛЬНЫЕ ребра его внешней и внутренней границы
+    Чтобы определить, как из границ внутренняя/внешняя, используется current_horiz_loop
+
+    Возвращает (множество loop внутренней границы, множество loop внешней границы)
+    '''
+ #   current_ring_outline_next = set([loop.link_loop_next for loop in loops]) # сбор loop на краях текущего вертикального кольца
+    current_ring_outline_next = [loop.link_loop_next for loop in loops] # сбор loop на краях текущего вертикального кольца
+   # for loop in current_ring_outline_next:
+   #     loop.edge.select = True
+   # return False
+ #   current_ring_outline_prev = set([loop.link_loop_prev for loop in loops]) # сбор loop на краях текущего вертикального кольца
+    current_ring_outline_prev = [loop.link_loop_prev for loop in loops] # сбор loop на краях текущего вертикального кольца
+   # for loop in current_ring_outline_prev:
+   #     loop.face.select = True
+   # return False
+    
+    # определяем, которая из границ внешняя/внутренняя
+    if (current_horiz_loop in current_ring_outline_next):
+        # внутренняя, внешняя
+        return (current_ring_outline_next, current_ring_outline_prev)
+    else:
+        # внутренняя, внешняя
+        return (current_ring_outline_prev, current_ring_outline_next)
+    
+def get_adjacent_faces_id_for_loop_outline(loop_outline: List[BMLoop]):
+    '''
+    Функция по данной ей границе из loop находит грани, смежные с этой границей с другой стороны
+    Определение стороны однозначно т к loop и radial_loop относятся только к одной грани!
+
+    если кольцо смежно само с собой/с дырой/с внутренними кольцами, то link_loop_radial_next.face.index будет содержать как раз
+    соседние грани этого же кольца / те же грани для которых вызывается radial_next / грани внутренних колец - соответственно
+    '''
+    faces_next_to_inner_outline_of_ring_id = [loop.link_loop_radial_next.face.index for loop in loop_outline]
+    #for face_id in faces_next_to_inner_outline_of_ring_id:
+    #    bm.faces[face_id].select = True
+    #return False
+    return faces_next_to_inner_outline_of_ring_id
+
+def is_current_ring_dense(current_horiz_loop: BMLoop, loops: List[BMLoop], faces_in_concentric_loops_id: Set[int], bm: BMesh):
+    '''
+    !!!!!! перед применением метода пересчитать нормали!!! из-за нормалей в разных полуплоскостях (неправильно определение внутренней и внешней стороны меша)
+    могут быть сбиты направления у BMloop!!!!
+    
+    Функция проверяет для данного ЦИКЛИЧНОГО кольца, что его внутренник край смежен только с гранями, посещенными во время поиска концентрических колец.
+
+    faces_in_concentric_loops_id уже должно содержать грани данного кольца!
+    все параметры названы так же, как в функции, где вызывается is_current_ring_dense
+    см. их смысл в find_maximum_concentric_faceloop_around_outline_dense
+    '''
+    inner_outline_loops, outer_outline_loops = get_outlins_of_ring(current_horiz_loop, loops)
+        
+    # собираем id граней, которые смежны с внутренней границей текущего кольца
+    faces_next_to_inner_outline_of_ring_id = get_adjacent_faces_id_for_loop_outline(inner_outline_loops)
+        
+    return faces_in_concentric_loops_id.issuperset(faces_next_to_inner_outline_of_ring_id)
+
+def slide_when_end_of_horiz_ring_because_of_holes_between_rings(current_horiz_loop: BMLoop):
+    '''
+    Функиця для данной current_horiz_loop лупы, находящейся на КРАЮ (is_boundary) дырки между концентрическими лупами
+    ищет, куда сдвинуть вдоль внешней границы текущего концентрического кольца эту current_horiz_loop, чтобы продолжить обход колец
+
+    Если сдвиг возможен - вернет новую horiz_loop
+    Если это на самом деле внешняя граница не просто кольца, а всего меша, то вокруг будет дырка ВЕЗДЕ и сдвиг не возможен. Вернет стартовую лупу.
+    
+    ВЫЗЫВАТЬ, когда уже известно, что current_horiz_loop внешнаяя КРАЕВАЯ! и краевая для КОЛЬЦА, уже записанного в допустимые концентрические!
+    '''
+    start_loop = current_horiz_loop
+    while(True):
+        next_loop = current_horiz_loop.link_loop_next.link_loop_radial_next.link_loop_next
+        #next_loop.edge.select = True
+        current_horiz_loop = next_loop
+        if (current_horiz_loop == start_loop):
+            return start_loop
+        if (not current_horiz_loop.edge.is_boundary):
+            # изначальная краевая лупа оказалась не внутри новой грани, а внутри той же грани, где только что было обход кольца, и направление неверное!
+            # поэтому, дойдя до некраевой лупы, нужно перепрыгнуть на сторону новой грани для обхода
+            return current_horiz_loop.link_loop_radial_next
+
+# версия find_maximum_concentric_faceloop_around_outline
+def find_maximum_concentric_faceloop_around_outline_dense(bm: BMesh, outline: List[BMEdge], visited_faces_id: Set[int]) -> List[Tuple[List[BMFace], List[BMLoop], int, List[BMFace]]]:
+    '''
+    !!!!!! перед применением метода пересчитать нормали!!! из-за нормалей в разных полуплоскостях (неправильно определение внутренней и внешней стороны меша)
+    могут быть сбиты направления у BMloop!!!!
+
+    Для данного края outline функция ищет максимальный набор концентрических петель.
+    Если петли найдены - возвращает результаты обхода этих петель функцией collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop
+    в виде списка результатов вызова для каждого кольца.
+    Последним в списке будет идти максимальное кольцо.
+
+    Следит за тем, что кольца были плотные (не содержали в области внутри себя грани, не принадлежащие одному из колец). Кольцо, смежное с лишними грани, не засчитывается.
+
+    Записывает грани колец в visited_faces_id
+    Не вызывает обход, если грань стартового граничного ребра уже посещена
+
+    TODO: должны ли сюда приходить "посещенные" и должны ли запомненные тут посещенные передаваться вовне?
+    '''
+
+    # выбор ребра на краю (любое). Это - ребро для горизонтального кольца ребер
+    start_edge = outline[0]
+    
+    result_for_concentric_loops: List[Tuple[List[BMFace], List[BMLoop], int, List[BMFace]]] = []
+  #  visited_faces_id = set()
+
+    current_horiz_loop = start_edge.link_loops[0]
+    #current_horiz_loop.edge.select = True
+    #return
+
+    # проверка на посещенность грани стартовой лупы. Если мы в посещенной зоне - не делать поиск колец! Конец
+    if (current_horiz_loop.face.index in visited_faces_id):
+        print("outline in visited area!")
+        return result_for_concentric_loops, visited_faces_id
+
+    current_vertic_loop = current_horiz_loop.link_loop_next # т к начальное ребро - краевое, у него всего одна лупа.
+    current_face = current_horiz_loop.face
+    if (not is_quad(current_face)):
+        return result_for_concentric_loops, visited_faces_id
+
+    faces_in_concentric_loops_id = set() # множество всех граней, посещенных при обходе в этой функции
+    # обход горизонтального кольца ребер
+    while(True):
+        faces_in_loop, loops, idx_change_dir, visited_not_quads, was_cycled = collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop(current_vertic_loop, visited_faces_id)
+        if (not was_cycled): # не добавляем эту петлю к концентрическим, заканчиваем обход
+            break
+
+        # проверка на плотность. Если кольцо неплотное - заканчиваем обход.
+        faces_id = [face.index for face in faces_in_loop]
+        faces_in_concentric_loops_id = faces_in_concentric_loops_id.union(faces_id)  # добавляем грани текущего кольца в посещенные
+        
+        if not is_current_ring_dense(current_horiz_loop, loops, faces_in_concentric_loops_id, bm):
+            break
+
+        # запоминаем результат
+        visited_faces_id = visited_faces_id.union(faces_id)
+        result_for_concentric_loops.append((faces_in_loop, loops, idx_change_dir, visited_not_quads))
+
+        # следующее ребро в горизонтальном кольце
+        next_horiz_loop = current_horiz_loop.link_loop_next.link_loop_next.link_loop_radial_next
+        current_horiz_loop = next_horiz_loop
+        if (current_horiz_loop.edge.is_boundary): # дошли до края
+            slide_loop = slide_when_end_of_horiz_ring_because_of_holes_between_rings(current_horiz_loop) # попробуем сдвинуться по краю (работает, если встретили дырку между концентрическими кольцами)
+            if slide_loop == current_horiz_loop: # сдвиг не возможен => находится на краю меша, конец обхода
+                break
+            current_horiz_loop = slide_loop
+        current_face = current_horiz_loop.face
+        if (not is_quad(current_face)):
+            break
+        current_vertic_loop = current_horiz_loop.link_loop_next.link_loop_radial_next
+
+    return result_for_concentric_loops, visited_faces_id
 
 ###############################################################################################################################################################
 # --- creating regular grid with poles
@@ -492,12 +647,13 @@ def main():
    #         edge.select = True
 
     # --- поиск максимальных концентрических колец
-
-    result = find_maximum_concentric_faceloop_around_outline(bm, outlines[0])
-    for ring_data in result:
-        faces_in_loop, loops, idx_change_dir, visited_not_quads = ring_data
-        for face in faces_in_loop:
-            face.select = True
+    visited_faces_id = set()
+    for outline in outlines:
+        result, visited_faces_id = find_maximum_concentric_faceloop_around_outline_dense(bm, outline, visited_faces_id)
+        for ring_data in result:
+            faces_in_loop, loops, idx_change_dir, visited_not_quads = ring_data
+            for face in faces_in_loop:
+                face.select = True
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
