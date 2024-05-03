@@ -433,7 +433,7 @@ def is_current_ring_dense(current_horiz_loop: BMLoop, loops: List[BMLoop], faces
     # собираем id граней, которые смежны с внутренней границей текущего кольца
     faces_next_to_inner_outline_of_ring_id = get_adjacent_faces_id_for_loop_outline(inner_outline_loops)
         
-    return faces_in_concentric_loops_id.issuperset(faces_next_to_inner_outline_of_ring_id)
+    return faces_in_concentric_loops_id.issuperset(faces_next_to_inner_outline_of_ring_id), inner_outline_loops, outer_outline_loops
 
 def slide_when_end_of_horiz_ring_because_of_holes_between_rings(current_horiz_loop: BMLoop):
     '''
@@ -467,6 +467,7 @@ def find_maximum_concentric_faceloop_around_outline_dense(bm: BMesh, outline: Li
     Если петли найдены - возвращает результаты обхода этих петель функцией collect_face_loop_with_recording_visited_not_quads_nocross_concrete_loop
     в виде списка результатов вызова для каждого кольца.
     Последним в списке будет идти максимальное кольцо.
+    Также возвращает край (List[BMLoop]) максимального кольца (лупы будут изнутри кольца)
 
     Следит за тем, что кольца были плотные (не содержали в области внутри себя грани, не принадлежащие одному из колец). Кольцо, смежное с лишними грани, не засчитывается.
 
@@ -489,13 +490,14 @@ def find_maximum_concentric_faceloop_around_outline_dense(bm: BMesh, outline: Li
     # проверка на посещенность грани стартовой лупы. Если мы в посещенной зоне - не делать поиск колец! Конец
     if (current_horiz_loop.face.index in visited_faces_id):
         print("outline in visited area!")
-        return result_for_concentric_loops, visited_faces_id
+        return result_for_concentric_loops, visited_faces_id, []
 
     current_vertic_loop = current_horiz_loop.link_loop_next # т к начальное ребро - краевое, у него всего одна лупа.
     current_face = current_horiz_loop.face
     if (not is_quad(current_face)):
-        return result_for_concentric_loops, visited_faces_id
+        return result_for_concentric_loops, visited_faces_id, []
 
+    maximum_ring_outline = []
     faces_in_concentric_loops_id = set() # множество всех граней, посещенных при обходе в этой функции
     # обход горизонтального кольца ребер
     while(True):
@@ -507,12 +509,14 @@ def find_maximum_concentric_faceloop_around_outline_dense(bm: BMesh, outline: Li
         faces_id = [face.index for face in faces_in_loop]
         faces_in_concentric_loops_id = faces_in_concentric_loops_id.union(faces_id)  # добавляем грани текущего кольца в посещенные
         
-        if not is_current_ring_dense(current_horiz_loop, loops, faces_in_concentric_loops_id, bm):
+        is_dense, inner_outline, outer_outline = is_current_ring_dense(current_horiz_loop, loops, faces_in_concentric_loops_id, bm)
+        if not is_dense:
             break
 
         # запоминаем результат
         visited_faces_id = visited_faces_id.union(faces_id)
         result_for_concentric_loops.append((faces_in_loop, loops, idx_change_dir, visited_not_quads))
+        maximum_ring_outline = outer_outline
 
         # следующее ребро в горизонтальном кольце
         next_horiz_loop = current_horiz_loop.link_loop_next.link_loop_next.link_loop_radial_next
@@ -527,7 +531,8 @@ def find_maximum_concentric_faceloop_around_outline_dense(bm: BMesh, outline: Li
             break
         current_vertic_loop = current_horiz_loop.link_loop_next.link_loop_radial_next
 
-    return result_for_concentric_loops, visited_faces_id
+    return result_for_concentric_loops, visited_faces_id, maximum_ring_outline
+
 
 ###############################################################################################################################################################
 # --- creating regular grid with poles
@@ -608,18 +613,19 @@ def get_grid_by_poles(bm: BMesh):
             poles_verts.append(v)
     
     grid_edges = set()
-    verts_in_flowloops = set()
+    verts_in_flowloops_id = set() # все вершины ребер, участвующих в сетке. Для отслеживания пересечений в сетке.
     for pole in poles_verts:
+        # обработка краевых вершин
         if (pole.is_boundary):
             for edge in pole.link_edges:
                 if (edge.is_boundary):
                     grid_edges.add(edge)
                 else:
                     if len(pole.link_edges) > 3:
-                        get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops)
+                        get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops_id)
             continue
         for edge in pole.link_edges:
-            get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops)
+            get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops_id)
             #grid_edges.extend(edge_rings)
     not_visited_pole_edges = set()
     for pole in poles_verts:
@@ -629,6 +635,278 @@ def get_grid_by_poles(bm: BMesh):
             if (edge not in grid_edges):
                 not_visited_pole_edges.add(edge)
     return poles_verts, grid_edges, not_visited_pole_edges
+
+#######################################################################################################################################
+# методы для считывания/редактирования разметки граней по зонам
+
+# константы для слоя с разметкой граней по зонам
+NOT_IN_ZONE = 0 # у концентрических зон индексы < 0, у остальных > 0
+
+def write_faces_to_zone_layer(bm: BMesh, layer_name: str, faces_id: List[int], index: int):
+    '''
+    Функция записывает всем граням из заданного layer_name слоя граней значения index (номер зоны)
+    Ничего не возвращает
+    Если слоя нет, создает его
+    '''
+    if layer_name not in bm.faces.layers.int:
+        face_zones_layer = bm.faces.layers.int.new(layer_name)
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    for id in faces_id:
+        bm.faces[id][face_zones_layer] = index
+
+def get_faces_from_zone_layer(bm: BMesh, layer_name: str, index: int):
+    '''
+    Функция ищет грани, у которых слой layer_name имеет значение index (грани из зоны номер index)
+    Если слоя нет, возвращает пустое множество
+    '''
+    if layer_name not in bm.faces.layers.int:
+        return set()
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+    
+    faces_from_zone_id = set()
+    for f in bm.faces:
+        if f[face_zones_layer] == index:
+            faces_from_zone_id.add(f.index)
+
+    return faces_from_zone_id
+
+def delete_faces_from_zone_layer(bm: BMesh, layer_name: str, faces_to_delete: List[BMFace]):
+    '''
+    Функция всем данным гранями записывает в слой граней layer_name значение NOT_IN_ZONE
+    '''
+    if layer_name not in bm.faces.layers.int:
+        return
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+    
+    for f in faces_to_delete:
+        f[face_zones_layer] = NOT_IN_ZONE
+
+def show_select_all_faces_from_zone_layer(bm: BMesh, layer_name: str, index: int):
+    '''
+    Функция ищет все грани, у которых в слое граней layer_name стоит значение index (номер зоны)
+    и делает их выбранными в edit_mode
+    !!! При этом остальные грани становятся невыбранными в edit_mode !!!
+
+    !!!!! НЕ ЗАБЫТЬ СДЕЛАТЬ bm.update
+    '''
+    if layer_name not in bm.faces.layers.int:
+        return
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    for f in bm.faces:
+        if f[face_zones_layer] == index:
+            f.select = True
+        #else:
+        #    f.select = False
+
+def prepare_zone_layer(bm: BMesh, layer_name: str):
+    '''
+    Функция содает слой layer_name в слоях граней
+
+    Вызывать функцию перед всеми обходами меша, иначе будут проблемы с (пересоздавшимися?) BMFace
+    TODO: как правильно работать со слоями??
+    '''
+    if layer_name not in bm.faces.layers.int:
+        face_zones_layer = bm.faces.layers.int.new(layer_name)
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+
+###########################################################################################################################
+
+
+# константы для определения, какой области принадлежит полюс
+CONCENTRIC_AREA = -1
+NOT_CONCENTRIC_AREA = 1
+OUTLINE_AREA = 10
+
+def define_pole_area(pole: BMVert, bm: BMesh, layer_name: str):
+    '''
+    Функция определяет, какой области принадлежит полюс: области концентрических колец по краям меша / всему остальному пространству / границе между эти двумя областями
+    ! граница между зонами = outline максимального кольца
+    '''
+
+    if layer_name not in bm.faces.layers.int:
+        print("Try to get zones_layer for pole are detection, but layer does not exist!")
+        return
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    # определение количества смежных граней из разных зон
+    count_faces_in_concentric_area = 0
+    count_faces_in_not_concentric_area = 0
+    for face in pole.link_faces:
+        if face[face_zones_layer] >= 0:
+            count_faces_in_not_concentric_area += 1
+        else:
+            count_faces_in_concentric_area += 1
+
+    # смежные грани только неконцентричные
+    if (count_faces_in_concentric_area == 0):
+        return NOT_CONCENTRIC_AREA
+    # смежные грани только концентричные
+    if (count_faces_in_not_concentric_area == 0):
+        return CONCENTRIC_AREA
+    # есть смежные грани обоих типов
+    return OUTLINE_AREA
+
+def define_edge_area(edge: BMEdge, bm: BMesh, layer_name: str):
+    '''
+    Функция определяет, какой области принадлежит ребро: области концентрических колец по краям меша / всему остальному пространству / границе между эти двумя областями
+    ! граница между зонами = outline максимального кольца
+    '''
+
+    if layer_name not in bm.faces.layers.int:
+        print("Try to get zones_layer for pole are detection, but layer does not exist!")
+        return
+    else:
+        face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    # определение количества смежных граней из разных зон
+    count_faces_in_concentric_area = 0
+    count_faces_in_not_concentric_area = 0
+    for face in edge.link_faces:
+        if face[face_zones_layer] >= 0:
+            count_faces_in_not_concentric_area += 1
+        else:
+            count_faces_in_concentric_area += 1
+
+    # смежные грани только неконцентричные
+    if (count_faces_in_concentric_area == 0):
+        return NOT_CONCENTRIC_AREA
+    # смежные грани только концентричные
+    if (count_faces_in_not_concentric_area == 0):
+        return CONCENTRIC_AREA
+    # есть смежные грани обоих типов
+    return OUTLINE_AREA
+
+def get_grid_by_poles_with_preprocessed_grid_edges(bm: BMesh, grid_edges: Set[BMEdge], layer_name: str):
+    '''
+    Функция ищет все полюса и для каждого полюса через все его ребра проводит петли ребер
+    Возвращает все петли ребер, начинающиеся в полюсах
+    Ребра собираются в единое множество
+
+    Когда одна ветвь сетки упирается в уже построенную ветвь, построение ветки обрывается
+    => Сетка вообще говоря не однозначна и ее вид зависит от порядка обхода полюсов.
+    TODO: сделать управление этим?
+
+    Обработка краевых полюсов:
+    3-полюсы: краевые ребра добавляются в посещенные, построение сетки не запускается
+    >3-полюсы: краевые ребра добавляющая в посещенные, для не краевых - запуск построения сетки
+
+    grid_edges - ребра в сетке, может быть заранее подготовлено. Например, ручным вводом границ обхода
+    verts_in_flowloops_id - индексы всех вершин, участвующих в сетке, в т ч не полюсов, а тех, что соединяют ребра сетки.
+                            должны быть подготовлены соответственно.
+
+    TODO: ввести заданные вручную пределы, внутри которых строится сетка
+    TODO: обрабатывать края отдельно и не запускать сетку на зонах с краями!
+    '''
+    
+    poles_verts: List[BMVert] = []
+
+    for v in bm.verts:
+        if is_pole(v):
+            poles_verts.append(v)
+    
+    # сбор уже поучаствовавших в концентрических границах вершин
+    verts_in_flowloops_id = set()
+    for edge in grid_edges:
+        for vert in edge.verts:
+            verts_in_flowloops_id.add(vert.index)
+
+    for pole in poles_verts:
+        pole_area = define_pole_area(pole, bm, layer_name)
+        
+        # концентрическая область - уже размечена
+        if (pole_area == CONCENTRIC_AREA):
+            continue
+        # пограничная область - размечаем только ребрам в не концентрической области
+        elif (pole_area == OUTLINE_AREA):
+            for edge in pole.link_edges:
+                edge_area = define_edge_area(edge, bm, layer_name)
+                if (edge_area == NOT_CONCENTRIC_AREA):
+                    get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops_id)
+        # свободная область: размечаем по всем ребрам. Отдельная обработка краевых ребер, не попавших в концентрическую область!
+        else:
+            # обработка краевых полюсов на краях, где нет концентрических колец
+            if (pole.is_boundary):
+                for edge in pole.link_edges:
+                    if (edge.is_boundary):
+                        grid_edges.add(edge)
+                    else:
+                        if len(pole.link_edges) > 3:
+                            get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops_id)
+                continue
+            # обработка не краевых полюсов
+            for edge in pole.link_edges:
+                get_edge_flowloop(edge, pole, grid_edges, verts_in_flowloops_id)
+                #grid_edges.extend(edge_rings)
+    
+    # TODO: дебаговая часть
+    not_visited_pole_edges = set()
+    for pole in poles_verts:
+        for edge in pole.link_edges:
+            # проверяем мою теорию
+            #assert (edge in grid_edges)
+            if (edge not in grid_edges):
+                not_visited_pole_edges.add(edge)
+
+    return poles_verts, not_visited_pole_edges
+
+def get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm: BMesh):
+
+    # подготовка для разметки граней модели
+    face_zones_layer_name = "zones_layer"
+    zones_dict = {} # словарь index_zone: priority
+    max_index_negative = 0
+    max_index_positive = 0
+    default_priority_positive = 1
+    default_priority_negative = 2
+    prepare_zone_layer(bm, face_zones_layer_name)
+
+    grid_edges: Set[BMEdge] = set()
+    # поиск краев
+    outlines = get_edges_for_all_outlines(bm)
+    # поиск максимальных концентрических колец по краям меша
+    visited_faces_id = set()
+    for outline in outlines:
+        result, visited_faces_id, maximum_ring_outline = find_maximum_concentric_faceloop_around_outline_dense(bm, outline, visited_faces_id)
+
+        # разметка данной концентрической зоны
+        if (len(result) != 0):
+            # подготовка словаря
+            max_index_negative -= 1
+            zones_dict[max_index_negative] = default_priority_negative
+            for ring_data in result:
+                faces, loops, idx_change, quads = ring_data
+                faces_id = [face.index for face in faces]
+                write_faces_to_zone_layer(bm, face_zones_layer_name, faces_id, max_index_negative)
+
+        # края зоны становятся частью сетки
+        for loop in maximum_ring_outline:
+            #loop.edge.select = True
+            grid_edges.add(loop.edge)
+
+        # если на краю нет концентрических колец, то край будем обрабатывать внутри get_grid
+        if len(maximum_ring_outline) == 0:
+            continue
+        # TODO: это верно или нет?????????????????????????????
+        # на краях были лупы, поэтому края не нужно обрабатывать отдельно
+        for loop in outline:
+            grid_edges.add(loop)
+
+    #for index in zones_dict.keys():
+    #    show_select_all_faces_from_zone_layer(bm, face_zones_layer_name, index)
+
+    # строим сетку        
+    poles_verts, not_visited_pole_edges = get_grid_by_poles_with_preprocessed_grid_edges(bm, grid_edges, face_zones_layer_name)
+
+    for edge in grid_edges:
+        edge.select = True
 
 def main():
     #--- EDIT MODE!
@@ -641,19 +919,21 @@ def main():
     #    edge.select = True
 
    # --- получение краевых границ
-    outlines = get_edges_for_all_outlines(bm)
+   # outlines = get_edges_for_all_outlines(bm)
    # for floop in flowloops:
    #     for edge in floop:
    #         edge.select = True
 
     # --- поиск максимальных концентрических колец
-    visited_faces_id = set()
-    for outline in outlines:
-        result, visited_faces_id = find_maximum_concentric_faceloop_around_outline_dense(bm, outline, visited_faces_id)
-        for ring_data in result:
-            faces_in_loop, loops, idx_change_dir, visited_not_quads = ring_data
-            for face in faces_in_loop:
-                face.select = True
+    #visited_faces_id = set()
+    #for outline in outlines:
+    #    result, visited_faces_id, maximum_ring_outline = find_maximum_concentric_faceloop_around_outline_dense(bm, outline, visited_faces_id)
+    #    for ring_data in result:
+    #        faces_in_loop, loops, idx_change_dir, visited_not_quads = ring_data
+    #        for face in faces_in_loop:
+    #            face.select = True
+
+    get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
