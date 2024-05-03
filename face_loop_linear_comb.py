@@ -572,6 +572,8 @@ def get_edge_flowloop(edge_start: BMEdge, pole_start: BMVert, visited_edges: Set
     current_end_vert = end_vert
     current_loop = start_loop
     while (True):
+        #if (current_loop.edge.index in [1926, 19893, 25268, 34671]):
+        #    print("edge " + str(current_loop.edge.index) + " start pole: " + str(pole_start.index))
         if (current_loop.edge in visited_edges):
             break
         visited_edges.add(current_loop.edge)
@@ -718,6 +720,8 @@ def prepare_zone_layer(bm: BMesh, layer_name: str):
 
 ###########################################################################################################################
 
+#def get_poles_sort_poles_by_edge_count(bm: BMesh):
+#    for 
 
 # константы для определения, какой области принадлежит полюс
 CONCENTRIC_AREA = -1
@@ -784,6 +788,48 @@ def define_edge_area(edge: BMEdge, bm: BMesh, layer_name: str):
     # есть смежные грани обоих типов
     return OUTLINE_AREA
 
+def poles_sorted_by_degree(bm: BMesh):
+    '''
+    Функция собирает все полюсы меша и возвращает список с ними, сортировка по возрастанию степени полюса
+    '''
+    poles_verts: List[BMVert] = []
+
+    #for v in bm.verts:
+    #    if is_pole(v):
+    #        poles_verts.append(v)
+    poles_degrees_dict = {} # словарь степень_полюса : список id таких полюсов (количество легко посчитать)
+    for v in bm.verts:
+        if is_pole(v):
+            degree = len(v.link_edges)
+            if not (degree in poles_degrees_dict):
+                poles_degrees_dict[degree] = list([v.index])
+            else:
+                list_prev : List[int] = poles_degrees_dict[degree]
+                list_prev.append(v.index)
+                poles_degrees_dict[degree] = list_prev
+            #poles_verts.append(v)
+    print("poles statistics: ")
+    for key in poles_degrees_dict:
+        degree = key
+        count = len(poles_degrees_dict[key])
+        print(str(degree) + "-edge : " + str(count))
+    # полюса обрабатываются в порядке увелечения степени, не учитывается частота
+    sorted_digrees = sorted(poles_degrees_dict.keys())
+    #sorted_digrees = poles_degrees_dict.keys()
+    print("poriadok obhoda: " + str(sorted_digrees))
+    for key in sorted_digrees:
+        verts = [bm.verts[id] for id in poles_degrees_dict[key]]
+        poles_verts.extend(verts)
+    return poles_verts
+
+# TODO: сделать координату на выбор пользователя??
+def sort_poles_by_coordinates(poles: List[BMVert]):
+    '''
+    Функция сортирует список полюсов по их Z координате по убыванию (сверху вниз)
+    '''
+    poles_sorted = sorted(poles, key=lambda vert: vert.co.z, reverse=True)
+    return poles_sorted
+
 def get_grid_by_poles_with_preprocessed_grid_edges(bm: BMesh, grid_edges: Set[BMEdge], layer_name: str):
     '''
     Функция ищет все полюса и для каждого полюса через все его ребра проводит петли ребер
@@ -803,15 +849,12 @@ def get_grid_by_poles_with_preprocessed_grid_edges(bm: BMesh, grid_edges: Set[BM
                             должны быть подготовлены соответственно.
 
     TODO: ввести заданные вручную пределы, внутри которых строится сетка
-    TODO: обрабатывать края отдельно и не запускать сетку на зонах с краями!
+    TODO: хороший способ сортировки полюсов / замена останавок на построеные всех линий + очистку лишних
     '''
-    
-    poles_verts: List[BMVert] = []
+    # подготовка полюсов для обхода (сбор и сортировки)
+    poles_verts_sorted_by_degree = poles_sorted_by_degree(bm)
+    poles_verts = sort_poles_by_coordinates(poles_verts_sorted_by_degree)
 
-    for v in bm.verts:
-        if is_pole(v):
-            poles_verts.append(v)
-    
     # сбор уже поучаствовавших в концентрических границах вершин
     verts_in_flowloops_id = set()
     for edge in grid_edges:
@@ -819,6 +862,9 @@ def get_grid_by_poles_with_preprocessed_grid_edges(bm: BMesh, grid_edges: Set[BM
             verts_in_flowloops_id.add(vert.index)
 
     for pole in poles_verts:
+        #if pole.index == 7284:
+        #    break
+            #print('kek')
         pole_area = define_pole_area(pole, bm, layer_name)
         
         # концентрическая область - уже размечена
@@ -933,6 +979,11 @@ def main():
     #        for face in faces_in_loop:
     #            face.select = True
 
+    #for edge in bm.edges:
+    #    if edge.select:
+    #        print(edge.index)
+
+    #bm.verts[4218].select = True
     get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
 
     # обновление объекта на экране
