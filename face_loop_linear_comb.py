@@ -720,9 +720,6 @@ def prepare_zone_layer(bm: BMesh, layer_name: str):
 
 ###########################################################################################################################
 
-#def get_poles_sort_poles_by_edge_count(bm: BMesh):
-#    for 
-
 # константы для определения, какой области принадлежит полюс
 CONCENTRIC_AREA = -1
 NOT_CONCENTRIC_AREA = 1
@@ -904,13 +901,17 @@ def get_grid_by_poles_with_preprocessed_grid_edges(bm: BMesh, grid_edges: Set[BM
     return poles_verts, not_visited_pole_edges
 
 def get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm: BMesh):
+    '''
+    Функция, которая сначала вызывает сбор краев и поиск концентрических колец по краям,
+    размечает концентрические грани, записывает нужные края в число ребер сетки, а затем вызывает сбор сетки по полюсам.
+    '''
 
     # подготовка для разметки граней модели
     face_zones_layer_name = "zones_layer"
     zones_dict = {} # словарь index_zone: priority
     max_index_negative = 0
-    max_index_positive = 0
-    default_priority_positive = 1
+#    max_index_positive = 0
+#    default_priority_positive = 1
     default_priority_negative = 2
     prepare_zone_layer(bm, face_zones_layer_name)
 
@@ -951,8 +952,251 @@ def get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm: BMesh):
     # строим сетку        
     poles_verts, not_visited_pole_edges = get_grid_by_poles_with_preprocessed_grid_edges(bm, grid_edges, face_zones_layer_name)
 
-    for edge in grid_edges:
-        edge.select = True
+    #for edge in grid_edges:
+    #    edge.select = True
+
+    # TODO: еще возвращение колец уже обойденных для концентров!! 
+    return grid_edges, visited_faces_id, zones_dict
+
+##############################################################################################################################################
+# переделанные под нужды функции из old_versions
+
+def loop_go_inside_grid(starting_loop: BMLoop, is_second_go: bool, grid_edges: Set[BMEdge]) -> (List[BMFace], List[BMLoop], bool):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад - останавливается
+    Возвращает список всех граней, вошедших в face loop при обходе в данном направлении
+    is_second_go нужен, чтобы при обходе в обратную сторону не добавлять первую грань еще раз в список
+
+    останавливает обход если попадает на ребро сетки!
+    стартовая лупа не проверяется на принадлежность сетке
+    '''
+    faces_in_loop = []
+    loops = []
+    loop = starting_loop
+    
+    if (not is_quad(loop.face)):
+        return [], [], False
+    
+    if (not is_second_go):
+        faces_in_loop.append(loop.face)
+        loops.append(loop)
+
+    if (loop.edge in grid_edges):
+        return faces_in_loop, loops, False
+    
+    radial_loop = loop.link_loop_radial_next
+
+    # проверяем, что mesh оборвался (плоская поверхность)
+    # проверка основана на том, что у грани с обрывом на внешнем ребре только 1 link_loops
+    if (radial_loop == loop):
+        return faces_in_loop, loops, False
+    
+    # проверяем, следующая грань это квада? 
+    is_next_face_quad = is_quad(radial_loop.face)
+    if (not is_next_face_quad):
+        # уперлись в не квадратную грань, конец обхода
+        return faces_in_loop, loops, False
+    else:
+        faces_in_loop.append(radial_loop.face)
+        if (is_second_go):
+            loops.append(radial_loop)
+        else:
+            loops.append(radial_loop.link_loop_next.link_loop_next)
+    next_loop = radial_loop.link_loop_next.link_loop_next
+    
+    # цикл прыжков для сбора всей лупы пока не упремся в не кваду или не вернемся в начальную (замкнутая лупа)
+    # или не закончится плоский меш
+    
+    loop = next_loop
+    while next_loop.edge != starting_loop.edge:
+
+        # если попали на ребро сетки - конец обхода
+        if (loop.edge in grid_edges):
+            return faces_in_loop, loops, False
+
+        radial_loop = loop.link_loop_radial_next
+        next_loop = radial_loop.link_loop_next.link_loop_next
+        
+        # циклический меш
+        if (next_loop == starting_loop):
+            break
+
+        # проверяем, что mesh оборвался (плоская поверхность)
+        # проверка основана на том, что у грани с обрывом на внешнем ребре только 1 link_loops
+        if (radial_loop == loop):
+            return faces_in_loop, loops, False
+        
+        # проверяем, следующая грань это квада? 
+        is_next_face_quad = is_quad(radial_loop.face)
+        
+        if (not is_next_face_quad):
+            return faces_in_loop, loops, False
+        else:
+            faces_in_loop.append(radial_loop.face)
+            if (is_second_go):
+                loops.append(radial_loop)
+            else:
+                loops.append(radial_loop.link_loop_next.link_loop_next)
+
+        loop = next_loop
+    return faces_in_loop, loops, True
+
+
+def collect_face_loop_inside_grid(loop: BMEdge, grid_edges: List[BMEdge]) -> (List[BMFace], List[BMLoop], int):
+    '''
+    Функция обхода face loop (можно переделать в edge ring), начиная с первого ребра для edge ring
+    Работает только для квадов, попав на не квад/конец меша - меняет направление, попав снова - останавливается
+    Сначала идет только в одном направлении, затем в другую
+    Возвращает список всех граней, вошедших в face loop, и номер грани, с которой начался обход в другую сторону 
+    Если петля зациклена, возвращает -1 (надо соединить последнюю вершину с первой при создании кривой)
+
+    останавливает обход если попадает на ребро сетки!
+    стартовая лупа не проверяется на принадлежность сетке
+    '''
+    faces_in_loop = []
+    loops = []
+    #обход в одну сторону
+
+    faces_in_loop_one_direction, loops_one_direction, was_cycled_loop = loop_go_inside_grid(loop, False, grid_edges)
+    faces_in_loop.extend(faces_in_loop_one_direction)
+    loops.extend(loops_one_direction)
+    change_direction_face = len(faces_in_loop) - 1
+    if (was_cycled_loop):
+        return (faces_in_loop, loops, -1)
+    #обход в другую сторону, если не было цикла
+    # внутри того же face берем лупу на противоположной стороны, и направление обхода меняется
+    # первая лупа не проверяется на совпадение с сеткой!
+    loop = loop.link_loop_next.link_loop_next
+    faces_in_loop_two_direction, loops_two_direction, was_cycled_loop = loop_go_inside_grid(loop, True, grid_edges)
+    faces_in_loop.extend(faces_in_loop_two_direction)
+    loops.extend(loops_two_direction)
+    return (faces_in_loop, loops, change_direction_face)
+
+# допустим, пользователь сам выбирает начальную петлю (ребром конечно же), вдоль которой будет происходить сбор петель
+# эта версия просто идет вдоль петли и собирает для нее результаты вызова collect_face_loop от её поперечных петель
+def loops_for_loop_inside_grid(start_loop: BMLoop, visited_faces_id: Set[int], grid_edges: List[BMEdge]) -> List[Tuple[List[BMFace], List[BMLoop], int]]:
+    '''
+    Функция идет вдоль кольца, заданного стартовой лупой, и собирает все принадлежащие ей
+    перпендикулярные кольца
+    изменяет множество visited_faces_id
+    не выходит за пределы области вызова в сетке grid_edges
+    '''
+    
+    result = []
+
+    faces_in_loop, edge_ring, idx_change_dir = collect_face_loop_inside_grid(start_loop, grid_edges)
+    for face in faces_in_loop:
+        visited_faces_id.add(face.index)
+    for loop in edge_ring:
+        # выбор перпендикулярной лупы
+        loop_next = loop.link_loop_next
+        faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner = collect_face_loop_inside_grid(loop_next, grid_edges)
+        for face in faces_in_loop_inner:
+            visited_faces_id.add(face.index)
+        result.append((faces_in_loop_inner, edge_ring_inner, idx_change_dir_inner))
+    
+    return result
+
+###################################################################################################################################################################
+
+def choose_next_loop(bm: BMesh, not_visited_faces_id: Set[int], grid_edges: List[BMEdge]):
+    '''
+    Фунция выбирает из непосещенных граней какую-то (без признаков и сортировок), ищет у нее подходящее ребро (не краевое и не из сетки)
+    Возвращает loop с внутренней стороны грани.
+    На данный момент, будет попытка найти у грани не краевую и не сеточную лупу, но если таких нет, то функция вернут случайную лупу этой грани.
+    Даже изолированная в сетке одиночная грань будет обработана!
+    
+    TODO: еще до этой функции сделать слияние одиночных граней?
+    TODO: может тогда тут вообще не нужны никакие размышления, просто берем грань и любую ее loop??
+
+ #   Если на выбранной грани не окажется подходящих ребер, грань удалится из непосещенных, поиск подходящей грани с подходящим ребром продолжится    
+ #   Если грань и ребро не найдутся, функция вернет None, а not_visited_faces_id будет пусто
+    '''
+    while(len(not_visited_faces_id) != 0):
+        next_face_id = not_visited_faces_id.pop()
+        next_face = bm.faces[next_face_id]
+        next_edge : BMEdge = None
+
+        # ищем среди ребер ребро, которое не на ребрах сетки, а внутри области, ограниченной сеткой
+        for edge in next_face.edges:
+            if edge not in grid_edges:
+                next_edge = edge
+                # если ребро при этом не крайнее - берем
+                if not (next_edge.is_boundary):
+                    for loop in next_edge.link_loops:
+                        if loop.face.index == next_face_id:
+                            return loop
+            if next_edge != None:
+                return next_edge.link_loops[0] #крайнее ребро, у него всего одна лупа
+            
+        # если дошли сюда, то у грани все ребра сеточные, т е это изолированная грань
+        # TODO: вызов попытки слияния?
+        # возвращаем у нее ЛЮБУЮ лупу
+        return next_face.loops[0]
+    return None
+
+def choose_loop_for_orientation_by_size_of_zone(grid_edges: List[BMEdge], start_loop: BMLoop):
+    '''
+    Функция делает пробный обход из грани данной стартовой лупы по вертикали и по горизонтали.
+    Узнает размер области по длине собранных колец.
+    Возвращает ребро более короткого кольца, чтобы перпендикуляры по нему были в длинную сторону (в т. ч. решается вопрос полосок!)
+
+    !!! в полюсной сетке grid_edges все зоны регулярные, в том числе: все параллельные кольца одинакового размера, нет самопересечений
+    '''
+    faces_horizontal, loops_horizontal, idx_change_dir_horizontal = collect_face_loop_inside_grid(start_loop, grid_edges)
+
+    # берем боковую лупу любую из двух. ее краевость/сеточность учтется в collect_face_loop!
+    vertical_loop = start_loop.link_loop_next
+    faces_vertical, loops_vertical, idx_change_dir_vertical = collect_face_loop_inside_grid(vertical_loop, grid_edges)
+
+    if len(faces_horizontal) > len(faces_vertical):
+        return vertical_loop
+    return start_loop
+    
+
+# TODO: здесь и в постройке grid с учетом концентров - сделать словарь самоуправляющимся объектом!!!! чтобы он сам следил за индексом!!!!
+def go_all_grid_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict):
+    '''
+    TODO: сделать назначение приоритетов порандомнее?? или это вообще где-нибудь снаружи
+    '''
+    # подготовка словаря
+    max_index_positive = 0 
+    default_priority_positive = 1
+    
+    # все грани меша = непосещенные
+    not_visited_face_id = set()
+    # выкинуть не квады и посещенные
+    for face in bm.faces:
+        if is_quad(face) and (face.index not in visited_faces_id):
+            not_visited_face_id.add(face.index)
+    
+    while(len(not_visited_face_id) > 0):
+        # выбрать новую грань и ребро
+        loop = choose_next_loop(bm, not_visited_face_id, grid_edges)
+        if (loop == None): # грани кончились, поэтому лупа для обхода так и не была выбрана
+            break
+        
+        # определить ориентацию обхода
+        loop = choose_loop_for_orientation_by_size_of_zone(grid_edges, loop)
+        
+        # обход
+        result = loops_for_loop_inside_grid(loop, visited_faces_id, grid_edges)
+        not_visited_face_id = not_visited_face_id.difference(visited_faces_id)  # вычеркиваем все посещенные грани из непосещенных граней для вызова
+        
+        # разметка zone_layer и запись в словарь
+        if (len(result) > 0):
+            max_index_positive += 1
+            zone_priority_dict[max_index_positive] = default_priority_positive
+            for edge_ring in result:
+                faces, loops, idx_change_dir = edge_ring
+                faces_id = [face.index for face in faces]
+                write_faces_to_zone_layer(bm, layer_name, faces_id, max_index_positive)
+
+        # построить базовые кривые в гранях (уже в отдельной функции)
+
+    print("count of positive zones = " + str(max_index_positive))
+    return
 
 def main():
     #--- EDIT MODE!
@@ -984,7 +1228,18 @@ def main():
     #        print(edge.index)
 
     #bm.verts[4218].select = True
-    get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
+
+   # for face in bm.faces:
+   #     if face.select:
+   #         print(face.index)
+
+
+    face_zones_layer_name = "zones_layer"
+    grid_edges, visited_faces_id, zones_dict = get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
+    for edge in grid_edges:
+        edge.select = True
+    go_all_grid_areas(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict)
+    
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
