@@ -920,8 +920,13 @@ def get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm: BMesh):
     outlines = get_edges_for_all_outlines(bm)
     # поиск максимальных концентрических колец по краям меша
     visited_faces_id = set()
+    concentric_zones_result = []
     for outline in outlines:
         result, visited_faces_id, maximum_ring_outline = find_maximum_concentric_faceloop_around_outline_dense(bm, outline, visited_faces_id)
+
+        # записываем результат, чтобы построить кривые в концентрических зонах в ОТДЕЛЬНОЙ функции ПОТОМ
+        if (len(result) != 0):
+            concentric_zones_result.append(result)
 
         # разметка данной концентрической зоны
         if (len(result) != 0):
@@ -955,8 +960,7 @@ def get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm: BMesh):
     #for edge in grid_edges:
     #    edge.select = True
 
-    # TODO: еще возвращение колец уже обойденных для концентров!! 
-    return grid_edges, visited_faces_id, zones_dict
+    return grid_edges, visited_faces_id, zones_dict, concentric_zones_result
 
 ##############################################################################################################################################
 # переделанные под нужды функции из old_versions
@@ -1156,8 +1160,19 @@ def choose_loop_for_orientation_by_size_of_zone(grid_edges: List[BMEdge], start_
     
 
 # TODO: здесь и в постройке grid с учетом концентров - сделать словарь самоуправляющимся объектом!!!! чтобы он сам следил за индексом!!!!
-def go_all_grid_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict):
+def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict):
     '''
+    Функция обходит все непосещенные зоны (ожидается, что все концентры будут уже посещены!! и записани в visited_faces_id)
+    и собирает в них перпендикулярные кольца.
+    Размечает зоны, заносит в словарь зон zones_priority_dict.
+    Вызывает построение базовых векторов в обойденных зонах.
+
+    Не посещает не-квады.
+    Посещает в том числе одиночные изолированные грани.
+    Правильно обходит полосы.
+    Выбор грани для посещения - случайная (предопределенная).
+    Выбор ориентации - так, чтобы перпендикуляры были || более длинной стороне зоны
+
     TODO: сделать назначение приоритетов порандомнее?? или это вообще где-нибудь снаружи
     '''
     # подготовка словаря
@@ -1193,9 +1208,33 @@ def go_all_grid_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set
                 faces_id = [face.index for face in faces]
                 write_faces_to_zone_layer(bm, layer_name, faces_id, max_index_positive)
 
-        # построить базовые кривые в гранях (уже в отдельной функции)
+                # построить базовые кривые в гранях (уже в отдельной функции)
+                make_basic_vectors_for_ring(faces, loops, idx_change_dir)
 
     print("count of positive zones = " + str(max_index_positive))
+    return
+
+def make_basic_vectors_for_ring(faces: List[BMFace], ring_loops: List[BMLoop], idx_change_dir: int):
+    '''
+    Функция строит базовую кривую вдоль кольца
+    '''
+
+    
+    return
+
+def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id, layer_name: str, zones_dict: dict,
+                                    concentric_result: List[Tuple[List[BMFace], List[BMLoop], int]]):
+    '''
+    Функция вызывает обход не концентрических областей и построение в них базовых кривых,
+    а также построение базовых кривых в ранее обойденных концентрических областях
+
+    '''
+
+    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict)
+
+    for result in concentric_result:
+        faces, loops, idx_change_dir = result
+        make_basic_vectors_for_ring(faces, loops, idx_change_dir)
     return
 
 def main():
@@ -1235,10 +1274,10 @@ def main():
 
 
     face_zones_layer_name = "zones_layer"
-    grid_edges, visited_faces_id, zones_dict = get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
+    grid_edges, visited_faces_id, zones_dict, concentric_result = get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
     for edge in grid_edges:
         edge.select = True
-    go_all_grid_areas(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict)
+    make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
     
 
     # обновление объекта на экране
