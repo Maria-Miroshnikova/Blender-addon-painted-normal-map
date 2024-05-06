@@ -1301,10 +1301,15 @@ def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited
     print("count of positive zones = " + str(max_index_positive))
     return
 
+##############################################################################################################################################
+# -- функции построения векторов по обойденным петлям граней
+
 def count_UV_coords_for_two_basic_verts_in_face(loop_start: BMLoop, loop_end: BMLoop, bm: BMesh):
     '''
     Функция строит векторы на главной средней линии грани на ее третях
     главная средняя грань = пересекает кольцо ребер
+
+    (для тестов была полезна)
     '''
     uv_layer = bm.loops.layers.uv.verify()
    
@@ -1365,51 +1370,43 @@ def count_angle_of_main_middle_line_around_OX_in_UV_radians(loop_start: BMLoop, 
     
     center_co /= 4
     
-    middle_of_main_edge = loop_start.link_loop_next[uv_layer].uv
+    middle_of_main_edge = (loop_start.link_loop_next[uv_layer].uv + loop_start[uv_layer].uv) / 2
     
     main_middle_line_vector = center_co - middle_of_main_edge
 
     OX = Vector((1, 0))
 
     # TODO: правильно ли работает это???
-    angle = OX.angle(main_middle_line_vector)
+    angle = OX.angle_signed(main_middle_line_vector)
 
-    if angle > math.radians(180.0):
-        angle -= math.radians(180.0)
+    # вектор главной средней линии направлен в нижнюю полуплоскость:
+    if angle > 0:
+        angle = -angle
+        angle += math.radians(180.0)
+    #if angle > math.radians(180.0):
+    #    angle -= math.radians(180.0)
 
     return angle
 
-def count_minimum_h_from_mass_center(center_co: Vector, v_1_uv_co: Vector, v_2_uv_co: Vector, u_1_uv_co: Vector, u_2_uv_co: Vector):
+def count_minimum_h_from_mass_center(center_co: Vector, face: BMFace, uv_layer):
     '''
-    v1, v2, u1, u2 - последовательные вершины грани, координаты в uv развертке
     center_co - центр масс грани, координаты в uv_развертке
     функция строит высоты из центра масс к каждой стороне и наход самую короткую высоту
     возвращает длину минимальной высоты
     '''
-    # точки пересечения высот из О со сторонами
-    h_v1_v2, other = geometry.intersect_point_line(center_co, v_1_uv_co, v_2_uv_co)
-    h_v2_u1, other = geometry.intersect_point_line(center_co, u_1_uv_co, v_2_uv_co)
-    h_u1_u2, other = geometry.intersect_point_line(center_co, u_1_uv_co, u_2_uv_co)
-    h_u2_v1, other = geometry.intersect_point_line(center_co, v_1_uv_co, u_2_uv_co)
     
-    # векторы высот из О к сторонами
-    h_vectors = []
-    h_vectors.append(center_co - h_v1_v2)
-    h_vectors.append(center_co - h_u1_u2)
-    h_vectors.append(center_co - h_v2_u1)
-    h_vectors.append(center_co - h_u2_v1)
-   # h_v1_v2_vec = center_co - h_v1_v2
-   # h_u1_u2_vec = center_co - h_u1_u2
-   # h_v2_u1_vec = center_co - h_v2_u1
-   # h_u2_h1_vec = center_co - h_u2_v1
-
-    # поиск минимальной высоты и ее вектора
+    h_vectors = [] # векторы высот из О к сторонами
+    loops = face.loops
     min_h = float('inf')
-    #min_h_vec = None
-    for h_vector in h_vectors:
+    for i in range(-1, len(face.loops) - 1):
+        v_1_uv = loops[i][uv_layer].uv
+        v_2_uv = loops[i + 1][uv_layer].uv
+        h_v1_v2_point, other = geometry.intersect_point_line(center_co, v_1_uv, v_2_uv) # точки пересечения высот из О со сторонами
+        h_vector = center_co - h_v1_v2_point
+
+        # поиск минимальной высоты и ее вектора
         if h_vector.magnitude < min_h:
             min_h = h_vector.magnitude
-            #min_h_vec = h_vector
 
     return min_h
 
@@ -1419,41 +1416,42 @@ def count_UV_verts_in_face_with_angle_around_OX(bm: BMesh, face: BMFace, ring_ed
     rign_edge_loop - (уже не актуально, т. к. угол относительно OX. можно либо ее, либо face)
     длина построенного вектора = len_coeff * (длина самой короткой высоты от центра масс к сторонам грани)
     '''
-
     uv_layer = bm.loops.layers.uv.verify()
     
+    # КОРОЧЕ до вершин придется достучаться через лупы соответствующие, потому что слой у них
+    # поэтому нужно для каждой точки найти соответствующую ей лупу и у нее уже просить координаты точки в uv
     loop_start = ring_edge_loop
-    # названия последовательных вершин:
-    # v_1 = loop_start.vert
-    # v_2 = loop_start.link_loop_next.vert
-    # u_1 = loop_start.link_loop_next.link_loop_next.vert
-    # u_2 = loop_start.link_loop_prev.vert
-    
-    # перевод координат в UV
 
-    v_1_uv_co = loop_start[uv_layer].uv
-    v_2_uv_co = loop_start.link_loop_next[uv_layer].uv
-    u_1_uv_co = loop_start.link_loop_next.link_loop_next[uv_layer].uv
-    u_2_uv_co = loop_start.link_loop_prev[uv_layer].uv
-    
-    v_center: Vector = (v_1_uv_co + v_2_uv_co) / 2
-    u_center: Vector = (u_1_uv_co + u_2_uv_co) / 2
-    
-    # точка/вектор O
-    center_co: Vector = (v_center + u_center) / 2
-    
-    min_h = count_minimum_h_from_mass_center(center_co, v_1_uv_co, v_2_uv_co, u_1_uv_co, u_2_uv_co)
-    
-    axis_vector = Vector((1, 0))
-    rotation_matrix_1 = Matrix.Rotation(angle, 2, axis_vector)
-    rotation_matrix_2 = Matrix.Rotation(angle + math.radians(180.0), 2, axis_vector)
+    center_co = Vector((0.0, 0.0))
 
-    p = center_co + len_coeff * min_h * rotation_matrix_1 * axis_vector
-    q = center_co + len_coeff * min_h * rotation_matrix_2 * axis_vector
+    for loop in loop_start.face.loops:
+        # сумма векторов всех точек грани в uv координатах
+        center_co += loop[uv_layer].uv
+    
+    center_co /= 4
+    
+    min_h = count_minimum_h_from_mass_center(center_co, face, uv_layer)
+    #min_h = 0.1 # сначала чисто угол протестируем
+    
+    axis_vector_1 = Vector((1, 0))
+    axis_vector_2 = Vector((1, 0))
+
+    if angle < 0:
+        angle = -angle
+    rotation_matrix_1 = Matrix.Rotation(angle, 2, 'X')
+    rotation_matrix_2 = Matrix.Rotation(angle + math.radians(180.0), 2, 'X')
+
+    axis_vector_1.rotate(rotation_matrix_1) 
+    axis_vector_2.rotate(rotation_matrix_2)
+    p = center_co + len_coeff * min_h * axis_vector_1
+    q = center_co + len_coeff * min_h * axis_vector_2
 
     return p, q
 
 def create_and_add_vector_to_vectormesh(vectormesh: BMesh, v1: Vector, v2: Vector):
+    '''
+    функция по двум данным точкам создает вершины, соединенные ребром, в меше vectormesh
+    '''
     idx_start_verts = len(vectormesh.verts)
     idx_start_edge = len(vectormesh.edges)
 
@@ -1485,6 +1483,7 @@ def make_basic_vectors_for_ring(faces: List[BMFace], ring_loops: List[BMLoop], f
     // я так понимаю, он соединен с другими векторами в одну кривую не будет!
     '''
     for i in range(0, len(ring_loops)):
+    #for i in range(0, 3):
         # TODO проверить что лупы соответствую граням своим
         loop_start = ring_loops[i]
         loop_end = loop_start.link_loop_next.link_loop_next
@@ -1493,14 +1492,22 @@ def make_basic_vectors_for_ring(faces: List[BMFace], ring_loops: List[BMLoop], f
         assert(loop_start.face.index not in face_to_vector_dict)
 
         # вычисление координат точек в UV
-        p, q = count_UV_coords_for_two_basic_verts_in_face(loop_start, loop_end, bm)
+        
+        # -- построение тестовых векторов базовых
+        #p, q = count_UV_coords_for_two_basic_verts_in_face(loop_start, loop_end, bm)
 
+        # -- вычисление угла базового и сразу построение без фильтра
+        angle = count_angle_of_main_middle_line_around_OX_in_UV_radians(loop_start, bm)
+        len_coeff = 0.8
+        p, q = count_UV_verts_in_face_with_angle_around_OX(bm, loop_start.face, loop_start, angle, len_coeff)
+        
         # TODO
         # временно их построить?? для визуализации и проверки парвильности рассчетов
 
         face_to_vector_dict[loop_start.face.index] = (p, q, loop_start)
-    for face in faces:
-        assert(face.index in face_to_vector_dict)
+        #break
+    #for face in faces:
+    #    assert(face.index in face_to_vector_dict)
     return
 
 def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id, layer_name: str, zones_dict: dict,

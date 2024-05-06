@@ -579,3 +579,79 @@ def recalculate_strokemesh_layers(bm: BMesh, strokemesh_name_base: str):
     return used_faces_id
 
 ###########################################
+
+# медленные версии функций посроения вектора в грани под углом, лишние действия
+
+def count_UV_verts_in_face_with_angle_around_OX_slow(bm: BMesh, face: BMFace, ring_edge_loop: BMLoop, angle: float, len_coeff: float):
+    '''
+    Функция вычисляет координаты двух точек, лежащих на линии, проходящей через центр масс и повернутой относительно OX на угол angle (в радианах!)
+    rign_edge_loop - (уже не актуально, т. к. угол относительно OX. можно либо ее, либо face)
+    длина построенного вектора = len_coeff * (длина самой короткой высоты от центра масс к сторонам грани)
+    '''
+
+    uv_layer = bm.loops.layers.uv.verify()
+    
+    loop_start = ring_edge_loop
+    # названия последовательных вершин:
+    # v_1 = loop_start.vert
+    # v_2 = loop_start.link_loop_next.vert
+    # u_1 = loop_start.link_loop_next.link_loop_next.vert
+    # u_2 = loop_start.link_loop_prev.vert
+    
+    # перевод координат в UV
+
+    v_1_uv_co = loop_start[uv_layer].uv
+    v_2_uv_co = loop_start.link_loop_next[uv_layer].uv
+    u_1_uv_co = loop_start.link_loop_next.link_loop_next[uv_layer].uv
+    u_2_uv_co = loop_start.link_loop_prev[uv_layer].uv
+    
+    v_center: Vector = (v_1_uv_co + v_2_uv_co) / 2
+    u_center: Vector = (u_1_uv_co + u_2_uv_co) / 2
+    
+    # точка/вектор O
+    center_co: Vector = (v_center + u_center) / 2
+    
+    min_h = count_minimum_h_from_mass_center_slow(center_co, v_1_uv_co, v_2_uv_co, u_1_uv_co, u_2_uv_co)
+    
+    axis_vector = Vector((1, 0))
+    rotation_matrix_1 = Matrix.Rotation(angle, 2, axis_vector)
+    rotation_matrix_2 = Matrix.Rotation(angle + math.radians(180.0), 2, axis_vector)
+
+    p = center_co + len_coeff * min_h * rotation_matrix_1 * axis_vector
+    q = center_co + len_coeff * min_h * rotation_matrix_2 * axis_vector
+
+    return p, q
+
+def count_minimum_h_from_mass_center_slow(center_co: Vector, v_1_uv_co: Vector, v_2_uv_co: Vector, u_1_uv_co: Vector, u_2_uv_co: Vector):
+    '''
+    v1, v2, u1, u2 - последовательные вершины грани, координаты в uv развертке
+    center_co - центр масс грани, координаты в uv_развертке
+    функция строит высоты из центра масс к каждой стороне и наход самую короткую высоту
+    возвращает длину минимальной высоты
+    '''
+    # точки пересечения высот из О со сторонами
+    h_v1_v2, other = geometry.intersect_point_line(center_co, v_1_uv_co, v_2_uv_co)
+    h_v2_u1, other = geometry.intersect_point_line(center_co, u_1_uv_co, v_2_uv_co)
+    h_u1_u2, other = geometry.intersect_point_line(center_co, u_1_uv_co, u_2_uv_co)
+    h_u2_v1, other = geometry.intersect_point_line(center_co, v_1_uv_co, u_2_uv_co)
+    
+    # векторы высот из О к сторонами
+    h_vectors = []
+    h_vectors.append(center_co - h_v1_v2)
+    h_vectors.append(center_co - h_u1_u2)
+    h_vectors.append(center_co - h_v2_u1)
+    h_vectors.append(center_co - h_u2_v1)
+   # h_v1_v2_vec = center_co - h_v1_v2
+   # h_u1_u2_vec = center_co - h_u1_u2
+   # h_v2_u1_vec = center_co - h_v2_u1
+   # h_u2_h1_vec = center_co - h_u2_v1
+
+    # поиск минимальной высоты и ее вектора
+    min_h = float('inf')
+    #min_h_vec = None
+    for h_vector in h_vectors:
+        if h_vector.magnitude < min_h:
+            min_h = h_vector.magnitude
+            #min_h_vec = h_vector
+
+    return min_h
