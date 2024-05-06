@@ -1,16 +1,103 @@
 import bpy
 import bmesh
 from bmesh.types import BMEdge, BMFace, BMLoop, BMesh, BMLayerItem, BMVert
+from bpy.types import Mesh, Object, Collection
 from bpy import context
 #from face_loop import get_last_collection_index, get_last_strokemesh_index, get_last_z_coord, is_quad
 
 from typing import List, Set, Tuple
+from mathutils import Vector, geometry, Matrix
+import math
 
 # !!! edge flowloop = петля ребер, добавила flow- чтобы не путать петли ребер и механизм BMloop
 
 #####################################################################################################################################
 # --- скопировано вместо импорта.
 # TODO: починить импорт в блендере
+
+##################################
+# функции создания нового пустого объекта с пустым мешем без вертекс групп
+
+def mesh_new(name: str) -> Mesh:
+    '''
+    Если мэш с именем таким уже есть - сделать пустым, если нет - создать новый пустой
+    '''
+    
+    if name in bpy.data.meshes:
+        mesh = bpy.data.meshes[name]
+        mesh.clear_geometry()
+    else:
+        mesh = bpy.data.meshes.new(name)
+    
+    print("Mesh created")
+    return mesh
+
+def obj_new(name : str, mesh: Mesh) -> Object:
+     '''
+     Если объект с именем таким уже есть - перепривязать переданный меш, если нет - создать новый объект      
+     '''
+     
+     if name in bpy.data.objects:
+         object = bpy.data.objects[name]
+         assert object.type == 'MESH'
+         object.data = mesh
+         # это достоверный способ?
+         # TODO!!!!!!!!!!
+         object.vertex_groups.clear()
+     else:
+         object = bpy.data.objects.new(name, mesh)
+     print("Object created")
+     #print("Object groups when created:")
+     #print(len(object.vertex_groups))
+     return object
+    
+def ob_to_col(obj: Object, col: Collection) -> None:
+    '''
+    Отвязывает объект от всех Colltction и от всех Scene Collection
+    и привязывает к нужной нам
+    '''
+    
+    for c in bpy.data.collections:
+        if obj.name in c.objects:
+            c.objects.unlink(obj)
+    for sc in bpy.data.scenes:
+        if obj.name in sc.collection.objects:
+            sc.collection.objects.unlink(obj)
+    col.objects.link(obj)
+    
+    print("Object assigned to Collection")   
+
+# достать из Object его mesh почему-то достаточно obj.data. Почему?
+# если ошибаюсь, то нужно все же возвращать mesh, obj
+def make_new_obj_with_empty_mesh_with_unique_name_in_scene(mesh_name: str, col_name_with_idx: str) -> Object:
+    '''
+    Функция, которая создает правильный объект с данным именем, удаляя из сцены дубли
+    '''
+    mesh = mesh_new(mesh_name)
+    #print(type(mesh))
+    #assert type(mesh) == Mesh
+     
+    obj = obj_new(mesh_name, mesh)
+     
+    # привязка объекта к сцене
+    col_name = col_name_with_idx #"TestCol"
+    #assert col_name in bpy.data.collections
+
+    ### проверка существования папки и ее создание, если ее нет
+    if col_name not in bpy.data.collections:
+        # New Collection
+        test_coll = bpy.data.collections.new(col_name)
+
+        # Add collection to scene collection
+        bpy.context.scene.collection.children.link(test_coll)
+    ###
+
+    col = bpy.data.collections[col_name] #коллекция это папка!
+     
+    ob_to_col(obj, col)
+    
+    print("Empty obj-mesh-etc created")
+    return obj
 
 def is_quad(face: BMFace) -> bool:
     '''
@@ -1160,7 +1247,7 @@ def choose_loop_for_orientation_by_size_of_zone(grid_edges: List[BMEdge], start_
     
 
 # TODO: здесь и в постройке grid с учетом концентров - сделать словарь самоуправляющимся объектом!!!! чтобы он сам следил за индексом!!!!
-def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict):
+def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict, faces_to_vector_dict: dict):
     '''
     Функция обходит все непосещенные зоны (ожидается, что все концентры будут уже посещены!! и записани в visited_faces_id)
     и собирает в них перпендикулярные кольца.
@@ -1209,17 +1296,211 @@ def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited
                 write_faces_to_zone_layer(bm, layer_name, faces_id, max_index_positive)
 
                 # построить базовые кривые в гранях (уже в отдельной функции)
-                make_basic_vectors_for_ring(faces, loops, idx_change_dir)
+                make_basic_vectors_for_ring(faces, loops, faces_to_vector_dict, bm)
 
     print("count of positive zones = " + str(max_index_positive))
     return
 
-def make_basic_vectors_for_ring(faces: List[BMFace], ring_loops: List[BMLoop], idx_change_dir: int):
+def count_UV_coords_for_two_basic_verts_in_face(loop_start: BMLoop, loop_end: BMLoop, bm: BMesh):
     '''
-    Функция строит базовую кривую вдоль кольца
+    Функция строит векторы на главной средней линии грани на ее третях
+    главная средняя грань = пересекает кольцо ребер
+    '''
+    uv_layer = bm.loops.layers.uv.verify()
+   
+    v_1 = loop_start.edge.verts[0]
+    v_2 = loop_start.edge.verts[1]
+    u_1 = loop_end.edge.verts[0]
+    u_2 = loop_end.edge.verts[1]
+
+    # КОРОЧЕ до вершин придется достучаться через лупы соответствующие, потому что слой у них
+    # поэтому нужно для каждой точки найти соответствующую ей лупу и у нее уже просить координаты точки в uv
+
+    for loop in loop_start.face.loops:
+        if loop.vert == v_1:
+            loop_v1 = loop
+        elif loop.vert == v_2:
+            loop_v2 = loop
+        elif loop.vert == u_1:
+            loop_u1 = loop
+        elif loop.vert == u_2:
+            loop_u2 = loop
+    
+    # перевод координат в UV
+
+    v_1_uv_co = loop_v1[uv_layer].uv
+    v_2_uv_co = loop_v2[uv_layer].uv
+    u_1_uv_co = loop_u1[uv_layer].uv
+    u_2_uv_co = loop_u2[uv_layer].uv
+
+    # TODO: проверить округление
+    #v_center: Vector = (v_1.co + v_2.co) / 2
+    #u_center: Vector = (u_1.co + u_2.co) / 2
+    v_center: Vector = (v_1_uv_co + v_2_uv_co) / 2
+    u_center: Vector = (u_1_uv_co + u_2_uv_co) / 2
+
+    middle_line_co: Vector = (v_center + u_center) / 2
+
+    p: Vector = middle_line_co + (v_center - middle_line_co) / 3
+    q: Vector = middle_line_co + (u_center - middle_line_co) / 3
+
+    return p, q
+
+def count_angle_of_main_middle_line_around_OX_in_UV_radians(loop_start: BMLoop, bm: BMesh):
+    '''
+    Функция ищет угол в радианах между ОХ и главной средней линией грани
+    главная средняя грань = пересекает кольцо ребер
+    Если угол будет > 180 то вычтет 180
+    '''
+    uv_layer = bm.loops.layers.uv.verify()
+    
+    # КОРОЧЕ до вершин придется достучаться через лупы соответствующие, потому что слой у них
+    # поэтому нужно для каждой точки найти соответствующую ей лупу и у нее уже просить координаты точки в uv
+
+    center_co = Vector((0.0, 0.0))
+
+    for loop in loop_start.face.loops:
+        # сумма векторов всех точек грани в uv координатах
+        center_co += loop[uv_layer].uv
+    
+    center_co /= 4
+    
+    middle_of_main_edge = loop_start.link_loop_next[uv_layer].uv
+    
+    main_middle_line_vector = center_co - middle_of_main_edge
+
+    OX = Vector((1, 0))
+
+    # TODO: правильно ли работает это???
+    angle = OX.angle(main_middle_line_vector)
+
+    if angle > math.radians(180.0):
+        angle -= math.radians(180.0)
+
+    return angle
+
+def count_minimum_h_from_mass_center(center_co: Vector, v_1_uv_co: Vector, v_2_uv_co: Vector, u_1_uv_co: Vector, u_2_uv_co: Vector):
+    '''
+    v1, v2, u1, u2 - последовательные вершины грани, координаты в uv развертке
+    center_co - центр масс грани, координаты в uv_развертке
+    функция строит высоты из центра масс к каждой стороне и наход самую короткую высоту
+    возвращает длину минимальной высоты
+    '''
+    # точки пересечения высот из О со сторонами
+    h_v1_v2, other = geometry.intersect_point_line(center_co, v_1_uv_co, v_2_uv_co)
+    h_v2_u1, other = geometry.intersect_point_line(center_co, u_1_uv_co, v_2_uv_co)
+    h_u1_u2, other = geometry.intersect_point_line(center_co, u_1_uv_co, u_2_uv_co)
+    h_u2_v1, other = geometry.intersect_point_line(center_co, v_1_uv_co, u_2_uv_co)
+    
+    # векторы высот из О к сторонами
+    h_vectors = []
+    h_vectors.append(center_co - h_v1_v2)
+    h_vectors.append(center_co - h_u1_u2)
+    h_vectors.append(center_co - h_v2_u1)
+    h_vectors.append(center_co - h_u2_v1)
+   # h_v1_v2_vec = center_co - h_v1_v2
+   # h_u1_u2_vec = center_co - h_u1_u2
+   # h_v2_u1_vec = center_co - h_v2_u1
+   # h_u2_h1_vec = center_co - h_u2_v1
+
+    # поиск минимальной высоты и ее вектора
+    min_h = float('inf')
+    #min_h_vec = None
+    for h_vector in h_vectors:
+        if h_vector.magnitude < min_h:
+            min_h = h_vector.magnitude
+            #min_h_vec = h_vector
+
+    return min_h
+
+def count_UV_verts_in_face_with_angle_around_OX(bm: BMesh, face: BMFace, ring_edge_loop: BMLoop, angle: float, len_coeff: float):
+    '''
+    Функция вычисляет координаты двух точек, лежащих на линии, проходящей через центр масс и повернутой относительно OX на угол angle (в радианах!)
+    rign_edge_loop - (уже не актуально, т. к. угол относительно OX. можно либо ее, либо face)
+    длина построенного вектора = len_coeff * (длина самой короткой высоты от центра масс к сторонам грани)
     '''
 
+    uv_layer = bm.loops.layers.uv.verify()
     
+    loop_start = ring_edge_loop
+    # названия последовательных вершин:
+    # v_1 = loop_start.vert
+    # v_2 = loop_start.link_loop_next.vert
+    # u_1 = loop_start.link_loop_next.link_loop_next.vert
+    # u_2 = loop_start.link_loop_prev.vert
+    
+    # перевод координат в UV
+
+    v_1_uv_co = loop_start[uv_layer].uv
+    v_2_uv_co = loop_start.link_loop_next[uv_layer].uv
+    u_1_uv_co = loop_start.link_loop_next.link_loop_next[uv_layer].uv
+    u_2_uv_co = loop_start.link_loop_prev[uv_layer].uv
+    
+    v_center: Vector = (v_1_uv_co + v_2_uv_co) / 2
+    u_center: Vector = (u_1_uv_co + u_2_uv_co) / 2
+    
+    # точка/вектор O
+    center_co: Vector = (v_center + u_center) / 2
+    
+    min_h = count_minimum_h_from_mass_center(center_co, v_1_uv_co, v_2_uv_co, u_1_uv_co, u_2_uv_co)
+    
+    axis_vector = Vector((1, 0))
+    rotation_matrix_1 = Matrix.Rotation(angle, 2, axis_vector)
+    rotation_matrix_2 = Matrix.Rotation(angle + math.radians(180.0), 2, axis_vector)
+
+    p = center_co + len_coeff * min_h * rotation_matrix_1 * axis_vector
+    q = center_co + len_coeff * min_h * rotation_matrix_2 * axis_vector
+
+    return p, q
+
+def create_and_add_vector_to_vectormesh(vectormesh: BMesh, v1: Vector, v2: Vector):
+    idx_start_verts = len(vectormesh.verts)
+    idx_start_edge = len(vectormesh.edges)
+
+    z_coord = 0
+    new_vert_1 = vectormesh.verts.new(Vector((v1.x, v1.y, z_coord)))
+    new_vert_2 = vectormesh.verts.new(Vector((v2.x, v2.y, z_coord)))
+    #new_vert_1 = vectormesh.verts.new(Vector((1, 0, z_coord)))
+    #new_vert_2 = vectormesh.verts.new(Vector((0, 0, z_coord)))
+    vectormesh.edges.new((new_vert_1, new_vert_2))
+    
+    # обновление данных меша, так просят делать в документации
+    vectormesh.verts.ensure_lookup_table()
+    vectormesh.edges.ensure_lookup_table()
+
+    for i in range(idx_start_verts, idx_start_verts + 2):
+        vectormesh.verts[i].index = i    
+    vectormesh.edges[idx_start_edge].index = i
+    return
+
+def make_basic_vectors_for_ring(faces: List[BMFace], ring_loops: List[BMLoop], face_to_vector_dict: dict, bm: BMesh):
+    '''
+    Функция строит базовую кривую вдоль кольца.
+    Для каждой грани она вычислят координаты в UV для двух точек отрезка кривой, расположенного внутри грани
+    перпендикулярно ребрам кольца посередине грани.
+    Это и есть вектор базовый.
+    Для каждой грани запоминается ее вектор.
+    
+    // его длина (?) и направление должны поменяться в будущем
+    // я так понимаю, он соединен с другими векторами в одну кривую не будет!
+    '''
+    for i in range(0, len(ring_loops)):
+        # TODO проверить что лупы соответствую граням своим
+        loop_start = ring_loops[i]
+        loop_end = loop_start.link_loop_next.link_loop_next
+
+        assert(loop_start.face.index == loop_end.face.index)
+        assert(loop_start.face.index not in face_to_vector_dict)
+
+        # вычисление координат точек в UV
+        p, q = count_UV_coords_for_two_basic_verts_in_face(loop_start, loop_end, bm)
+
+        # TODO
+        # временно их построить?? для визуализации и проверки парвильности рассчетов
+
+        face_to_vector_dict[loop_start.face.index] = (p, q, loop_start)
+    for face in faces:
+        assert(face.index in face_to_vector_dict)
     return
 
 def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id, layer_name: str, zones_dict: dict,
@@ -1230,12 +1511,15 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
 
     '''
 
-    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict)
+    faces_to_vector_dict = {} # словарь face_id : vector (p - q), где p и q - точки на третях средней линии грани
+    
+    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_vector_dict)
 
     for result in concentric_result:
-        faces, loops, idx_change_dir = result
-        make_basic_vectors_for_ring(faces, loops, idx_change_dir)
-    return
+        for edge_ring in result:
+            faces, loops, idx_change_dir, not_quads = edge_ring
+            make_basic_vectors_for_ring(faces, loops, faces_to_vector_dict, bm)
+    return faces_to_vector_dict
 
 def main():
     #--- EDIT MODE!
@@ -1277,8 +1561,33 @@ def main():
     grid_edges, visited_faces_id, zones_dict, concentric_result = get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
     for edge in grid_edges:
         edge.select = True
-    make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
+    faces_to_vector_dict = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
     
+    # -- создание vectormesh и построение точек
+    # TODO настроить параметры и т д
+    index = 0
+    vectormesh_name = "VectorMesh_"
+    vectormesh_col_name = "VectorMeshes"
+    # создаем объект, меш, привязываем к коллекции, все пустое.
+    # это - будущий накопитель для кривых-петель-штрихов.
+    vectormesh_obj = make_new_obj_with_empty_mesh_with_unique_name_in_scene(vectormesh_name + str(index), vectormesh_col_name)
+    index += 1
+    vector_mesh = vectormesh_obj.data
+    # создает bmesh для него чтобы можно было добавлять точки.
+    vector_bm = bmesh.new()
+    vector_bm.from_mesh(vector_mesh)
+
+    for key in faces_to_vector_dict.keys():
+        v1, v2, ring_edge = faces_to_vector_dict[key]
+        #face = bm.faces[key]
+        create_and_add_vector_to_vectormesh(vector_bm, v1, v2)
+
+    # очистка памяти и обновление VectorMesh на экране
+    vector_bm.to_mesh(vector_mesh)
+    vectormesh_obj.data.update()
+    vector_bm.free()
+
+    # -- остальной код
 
     # обновление объекта на экране
     bmesh.update_edit_mesh(mesh_obj.data)
