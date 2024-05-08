@@ -1247,7 +1247,7 @@ def choose_loop_for_orientation_by_size_of_zone(grid_edges: List[BMEdge], start_
     
 
 # TODO: здесь и в постройке grid с учетом концентров - сделать словарь самоуправляющимся объектом!!!! чтобы он сам следил за индексом!!!!
-def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict, faces_to_vector_dict: dict):
+def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zone_priority_dict: dict, faces_to_vector_dict: dict, count_basic_vector_params):
     '''
     Функция обходит все непосещенные зоны (ожидается, что все концентры будут уже посещены!! и записани в visited_faces_id)
     и собирает в них перпендикулярные кольца.
@@ -1296,7 +1296,7 @@ def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited
                 write_faces_to_zone_layer(bm, layer_name, faces_id, max_index_positive)
 
                 # построить базовые кривые в гранях (уже в отдельной функции)
-                count_basic_vector_angle_for_ring(faces, loops, faces_to_vector_dict, bm)
+                count_basic_vector_params(faces, loops, faces_to_vector_dict, bm)
 
     print("count of positive zones = " + str(max_index_positive))
     return
@@ -1381,8 +1381,9 @@ def count_angle_of_main_middle_line_around_OX_in_UV_radians(loop_start: BMLoop, 
 
     # вектор главной средней линии направлен в нижнюю полуплоскость:
     if angle > 0:
-        angle = -angle
-        angle += math.radians(180.0)
+  #      angle = -angle
+  #      angle += math.radians(180.0)
+        angle -= math.radians(180.0)
     #if angle > math.radians(180.0):
     #    angle -= math.radians(180.0)
 
@@ -1436,6 +1437,7 @@ def count_UV_verts_in_face_with_angle_around_OX(bm: BMesh, ring_edge_loop: BMLoo
     axis_vector_1 = Vector((1, 0))
     axis_vector_2 = Vector((1, 0))
 
+    # Угол будет вверх от ОХ если угол будет БОЛЬШЕ 0. Меньше - в нижнюю полуплоскость повернемся.
     if angle < 0:
         angle = -angle
     rotation_matrix_1 = Matrix.Rotation(angle, 2, 'X')
@@ -1443,6 +1445,51 @@ def count_UV_verts_in_face_with_angle_around_OX(bm: BMesh, ring_edge_loop: BMLoo
 
     axis_vector_1.rotate(rotation_matrix_1) 
     axis_vector_2.rotate(rotation_matrix_2)
+    p = center_co + len_coeff * min_h * axis_vector_1
+    q = center_co + len_coeff * min_h * axis_vector_2
+
+    return p, q
+
+def count_UV_verts_in_face_with_angle_around_basic_vector(bm: BMesh, ring_edge_loop: BMLoop, angle: float, len_coeff: float, basic_vector: Vector):
+    '''
+    Функция вычисляет координаты двух точек, лежащих на линии, проходящей через центр масс и повернутой относительно OX на угол angle (в радианах!)
+    rign_edge_loop - (уже не актуально, т. к. угол относительно OX. можно либо ее, либо face)
+    длина построенного вектора = len_coeff * (длина самой короткой высоты от центра масс к сторонам грани)
+    '''
+    uv_layer = bm.loops.layers.uv.verify()
+    
+    # КОРОЧЕ до вершин придется достучаться через лупы соответствующие, потому что слой у них
+    # поэтому нужно для каждой точки найти соответствующую ей лупу и у нее уже просить координаты точки в uv
+    loop_start = ring_edge_loop
+
+    center_co = Vector((0.0, 0.0))
+
+    for loop in loop_start.face.loops:
+        # сумма векторов всех точек грани в uv координатах
+        center_co += loop[uv_layer].uv
+    
+    center_co /= 4
+    
+    min_h = count_minimum_h_from_mass_center(center_co, loop_start.face, uv_layer)
+    #min_h = 0.1 # сначала чисто угол протестируем
+    
+    axis_vector_1 = Vector(basic_vector)
+    axis_vector_2 = Vector(basic_vector)
+
+    # Угол будет вверх от ОХ если угол будет БОЛЬШЕ 0. Меньше - в нижнюю полуплоскость повернемся.
+    #if angle < 0:
+    #    angle = -angle
+    # правильные ли это матрицы??
+    rotation_matrix_1 = Matrix.Rotation(angle, 2)
+    angle_2 = angle + math.radians(180.0)
+    if (angle == 0):
+        angle_2 = math.radians(180.0)
+    rotation_matrix_2 = Matrix.Rotation(angle_2, 2)
+
+    axis_vector_1.rotate(rotation_matrix_1) 
+    axis_vector_2.rotate(rotation_matrix_2)
+    axis_vector_1.normalize()
+    axis_vector_2.normalize()
     p = center_co + len_coeff * min_h * axis_vector_1
     q = center_co + len_coeff * min_h * axis_vector_2
 
@@ -1504,7 +1551,7 @@ def count_basic_vector_angle_for_ring(faces: List[BMFace], ring_loops: List[BMLo
     #    assert(face.index in face_to_vector_dict)
     return
 
-def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id, layer_name: str, zones_dict: dict,
+def make_basic_vectors_angles_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id, layer_name: str, zones_dict: dict,
                                     concentric_result: List[Tuple[List[BMFace], List[BMLoop], int]]):
     '''
     Функция вызывает обход не концентрических областей и подсчет углов базовых векторов с OX для граней колец,
@@ -1515,7 +1562,7 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
     faces_to_angles_dict = {} # словарь face_id : angle, в радианах, - угол между главной средней линией грани и осью OX, в uv координатах.
     
     # сбор колец неконцентрических областей и подсчет углов одновременно
-    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_angles_dict)
+    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_angles_dict, count_basic_vector_angle_for_ring)
 
     # подсчет углов концентрических областей
     for result in concentric_result:
@@ -1523,6 +1570,30 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
             faces, loops, idx_change_dir, not_quads = edge_ring
             count_basic_vector_angle_for_ring(faces, loops, faces_to_angles_dict, bm)
     return faces_to_angles_dict
+
+def  count_UV_coords_for_two_basic_verts_all_faces(faces: List[BMFace], loops: List[BMLoop], faces_to_vector_dict: dict, bm: BMesh):
+    for loop in loops:
+                p, q = count_UV_coords_for_two_basic_verts_in_face(loop, loop.link_loop_next.link_loop_next, bm)
+                faces_to_vector_dict[loop.face.index] = (p, q, loop)
+
+def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id, layer_name: str, zones_dict: dict,
+                                    concentric_result: List[Tuple[List[BMFace], List[BMLoop], int]]):
+    '''
+    Функция вызывает обход не концентрических областей и подсчет углов базовых векторов с OX для граней колец,
+    а также то же самое в ранее обойденных концентрических областях
+    '''
+
+    faces_to_vector_dict = {} # словарь face_id : vector (p - q), где p и q - точки на третях средней линии грани -- тестовое
+    
+    # сбор колец неконцентрических областей и подсчет углов одновременно
+    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_vector_dict, count_UV_coords_for_two_basic_verts_all_faces)
+
+    # подсчет углов концентрических областей
+    for result in concentric_result:
+        for edge_ring in result:
+            faces, loops, idx_change_dir, not_quads = edge_ring
+            count_UV_coords_for_two_basic_verts_all_faces(faces, loops, faces_to_vector_dict, bm)
+    return faces_to_vector_dict
 
 def make_vectors_from_dict(faces_to_vector_dict: dict, vector_bm: BMesh):
     '''
@@ -1535,10 +1606,184 @@ def make_vectors_from_dict(faces_to_vector_dict: dict, vector_bm: BMesh):
         create_and_add_vector_to_vectormesh(vector_bm, v1, v2)
     return
 
-def filter_face_angle(face: BMFace, face_to_angle_dict: dict, filter_params: List[int]):
-    return
+def filter_face_angle(bm: BMesh, face: BMFace, face_to_angle_dict: dict, filter_params: List[int], layer_name: str, zone_to_priority_dict: dict):
+    
+    # BFS с глубиной обхода = len(filter_params)
 
-def filter_angles_for_mesh(bm: BMesh, face_to_angle_dict: dict, len_coeff: float, face_to_vector_dict: dict):
+    # для конкретной грани - достать ее зону из слоя, достать из словаря приоритет этой зоны
+    # считать общую сумму приоритетов зон и приоритетов фильтра
+    
+    face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    filter_priority_summ = 0
+    zone_priority_summ = 0
+    angle_summ = 0
+    summ = 0
+
+    depth = 0
+    max_depth = len(filter_params) - 1
+    queue = []
+    queue_faces = set()
+    visited_faces = set()
+    queue.append((face, depth))
+    queue_faces.add(face.index)
+    while(len(queue) > 0):
+        current_face, current_depth = queue.pop()
+        visited_faces.add(current_face.index)
+        queue_faces.remove(current_face.index)
+        
+        # подсчет вклада этой грани в угол
+        filter_priority = filter_params[current_depth]
+        
+        zone_index = bm.faces[current_face.index][face_zones_layer]
+        zone_priority = zone_to_priority_dict[zone_index]
+
+        angle, ring_edge_loop = face_to_angle_dict[current_face.index]
+
+        #zone_priority_summ += zone_priority
+        #filter_priority_summ += filter_priority
+        summ += filter_priority * zone_priority
+        angle_summ += filter_priority * zone_priority * angle
+
+        # добавление смежных граней в очередь, если только мы не на максимальной глубине
+        if (current_depth == max_depth):
+            continue
+        # крестовой фильтр (не оч)
+        # TODO неправильная проверка in queue!!!!!!! не учитывается глубина
+        #for loop in current_face.loops:
+        #    if loop.edge.is_boundary:
+        #        continue
+        #    radial_loop: BMLoop = loop.link_loop_radial_next
+        #    adj_face = radial_loop.face
+        #    if adj_face in queue:
+        #        continue
+        #    if adj_face.index in visited_faces:
+        #        continue
+        #    queue.append((adj_face, current_depth + 1))
+
+        # ~квадратный фильтр ()
+        for vert in current_face.verts:
+            for f in vert.link_faces:
+                if f.index in queue_faces:
+                    continue
+                if f.index in visited_faces:
+                    continue
+                queue.append((f, current_depth + 1))
+                queue_faces.add(f.index)
+        
+   # angle_summ /= zone_priority_summ * filter_priority_summ
+    angle_summ /= summ
+
+    return angle_summ
+
+def filter_face_with_vectors(bm: BMesh, face: BMFace, face_to_vector_dict: dict, filter_params: List[int], layer_name: str, zone_to_priority_dict: dict):
+    
+    # BFS с глубиной обхода = len(filter_params)
+
+    # для конкретной грани - достать ее зону из слоя, достать из словаря приоритет этой зоны
+    # считать общую сумму приоритетов зон и приоритетов фильтра
+    
+    face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    filter_priority_summ = 0
+    zone_priority_summ = 0
+    angle_summ = 0
+    summ = 0
+
+    depth = 0
+    max_depth = len(filter_params) - 1
+    queue = []
+    queue_faces = set()
+    visited_faces = set()
+    queue.append((face, depth))
+    queue_faces.add(face.index)
+    
+    #vectors = []
+    main_p, main_q, loop = face_to_vector_dict[face.index]
+    main_vector: Vector = main_p - main_q
+    while(len(queue) > 0):
+        current_face, current_depth = queue.pop()
+        visited_faces.add(current_face.index)
+        queue_faces.remove(current_face.index)
+        
+        # подсчет вклада этой грани в угол
+        filter_priority = filter_params[current_depth]
+        
+        zone_index = bm.faces[current_face.index][face_zones_layer]
+        zone_priority = zone_to_priority_dict[zone_index]
+
+        p, q, ring_edge_loop = face_to_vector_dict[current_face.index]
+        vector = p - q
+
+        # основной вектор тоже участвует в BFS, но его мы пропускаем
+        if (vector != main_vector):
+            # в одной ли полуплоскости точки вектора (хз что делать из из разных)
+            # наверное, надо будет считать, какое из расстояний больше, и все равно в сторону большего направлять
+            # тогда и проверять не буду!
+
+            # найти ближнайшую из двух дочек к вектору
+            p_height_point, other = geometry.intersect_point_line(p, main_p, main_q)
+            q_height_point, other = geometry.intersect_point_line(q, main_p, main_q)
+
+            p_distance = (p - p_height_point).magnitude
+            q_distance = (q - q_height_point).magnitude
+
+            # сделать вектор от ближайшей к дальней точек
+
+            if (p_distance < q_distance):
+                vector = -vector
+
+            if (p_distance == q_distance):
+                # параллельный вектор - не учитывать при подсчете
+                # TODO переход к сбору смежных в очередь
+                break
+
+            # вроде этого уже достаточно будет
+            # даже сразу можно считать его вклад и не надо записывать в список
+            angle = main_vector.angle_signed(vector)
+
+            # верхняя полуплоскость
+            if angle < 0:
+                if angle < -math.radians(90.0):
+                    # поворот в положительную сторону, по часовой
+                    angle = (angle + math.radians(180.0))
+                else:
+                    # поворот в отрицательную сторону, против часовой
+                    angle = angle
+            # нижняя полуплоскость
+            else:
+                if angle > math.radians(90.0):
+                    # поворот в отрицательную сторону, против часовой
+                    angle = angle - math.radians(180.0)
+                else:
+                    # поворот в положительную сторону, по часовой
+                    angle = angle
+                
+            #angle_summ += angle
+            
+
+            zone_priority_summ += zone_priority
+            filter_priority_summ += filter_priority
+            summ += filter_priority * zone_priority
+            angle_summ += filter_priority * zone_priority * angle
+
+        # добавление смежных граней в очередь, если только мы не на максимальной глубине
+        if (current_depth == max_depth):
+            continue
+
+        # ~квадратный фильтр ()
+        for vert in current_face.verts:
+            for f in vert.link_faces:
+                if f.index in queue_faces:
+                    continue
+                if f.index in visited_faces:
+                    continue
+                queue.append((f, current_depth + 1))
+                queue_faces.add(f.index)
+
+    return -angle_summ, main_vector
+
+def filter_angles_for_mesh(bm: BMesh, face_to_angle_dict: dict, len_coeff: float, layer_name: str, zone_to_priority_dict: dict, filter_params: List[int]):
     '''
     Функция фильтрует каждую грань меша, получая усредненный угол (на основе значений базовых углов данной грани и смежных граней)
     Затем ищет точки для вектора под таким углом для этой грани
@@ -1547,13 +1792,18 @@ def filter_angles_for_mesh(bm: BMesh, face_to_angle_dict: dict, len_coeff: float
     # TODO: добавить параметры фильтра
     # TODO: настроить приоритеты в меше самом!
 
+    face_to_vector_dict: dict = {}
+
     for key in face_to_angle_dict.keys():
         # считываем базовые угол, посчитанный заранее
         basic_angle, loop_start = face_to_angle_dict[key]
 
         # подсчет нового угла с помощью фильтра для грани с id = key
         # TODO filter_params вместо []
-        angle = filter_face_angle(bm.faces[key], face_to_angle_dict, [])
+        
+        angle = filter_face_angle(bm, bm.faces[key], face_to_angle_dict, filter_params, layer_name, zone_to_priority_dict)
+        #angle, ring_edge_loop = face_to_angle_dict[key]
+        #angle = -math.radians(45.0)
 
         # поиск точек для вектора под новым углом
         p, q = count_UV_verts_in_face_with_angle_around_OX(bm, loop_start, angle, len_coeff)
@@ -1561,6 +1811,37 @@ def filter_angles_for_mesh(bm: BMesh, face_to_angle_dict: dict, len_coeff: float
         # запись в словарь face_id : (p, q)
         face_to_vector_dict[key] = (p, q)
 
+    return face_to_vector_dict
+
+def filter_vectors_for_mesh(bm: BMesh, face_to_vector_dict: dict, len_coeff: float, layer_name: str, zone_to_priority_dict: dict, filter_params: List[int]):
+    '''
+    Функция фильтрует каждую грань меша, получая усредненный угол (на основе значений базовых углов данной грани и смежных граней)
+    Затем ищет точки для вектора под таким углом для этой грани
+    Записывает вектора в словарь face_id: (p, q)
+    '''
+    # TODO: добавить параметры фильтра
+    # TODO: настроить приоритеты в меше самом!
+
+    faces_to_vector_new_dict = {}
+
+    for key in face_to_vector_dict.keys():
+        # считываем базовые угол, посчитанный заранее
+        p_basic, q_basic, loop_start = face_to_vector_dict[key]
+
+        # подсчет нового угла с помощью фильтра для грани с id = key
+        # TODO filter_params вместо []
+        
+        angle, basic_vector = filter_face_with_vectors(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
+        #angle, ring_edge_loop = face_to_angle_dict[key]
+        #angle = -math.radians(45.0)
+
+        # поворот базового вектора на вычисленный угол
+        p, q = count_UV_verts_in_face_with_angle_around_basic_vector(bm, loop_start, angle, len_coeff, basic_vector)
+        
+        # запись в словарь face_id : (p, q)
+        faces_to_vector_new_dict[key] = (p, q)
+
+    return faces_to_vector_new_dict
 
 def main():
     #--- EDIT MODE!
@@ -1596,13 +1877,19 @@ def main():
    # for face in bm.faces:
    #     if face.select:
    #         print(face.index)
-
+   # return
 
     face_zones_layer_name = "zones_layer"
     grid_edges, visited_faces_id, zones_dict, concentric_result = get_grid_by_poles_with_outlines_handling_and_concentric_priority(bm)
     for edge in grid_edges:
         edge.select = True
+    
+    #faces_to_angle = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
     faces_to_vector_dict = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
+    
+    len_coeff = 0.8
+    filter_params = [1000, 0.1, 0.02, 0.02, 0.01]
+    faces_to_vector_dict_new = filter_vectors_for_mesh(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, filter_params)
     
     # -- создание vectormesh и построение точек
     # TODO настроить параметры и т д
@@ -1618,10 +1905,7 @@ def main():
     vector_bm = bmesh.new()
     vector_bm.from_mesh(vector_mesh)
 
-    for key in faces_to_vector_dict.keys():
-        v1, v2, ring_edge = faces_to_vector_dict[key]
-        #face = bm.faces[key]
-        create_and_add_vector_to_vectormesh(vector_bm, v1, v2)
+    make_vectors_from_dict(faces_to_vector_dict_new, vector_bm)
 
     # очистка памяти и обновление VectorMesh на экране
     vector_bm.to_mesh(vector_mesh)
