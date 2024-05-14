@@ -1273,6 +1273,8 @@ def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited
         if is_quad(face) and (face.index not in visited_faces_id):
             not_visited_face_id.add(face.index)
     
+    list_of_results = []
+
     while(len(not_visited_face_id) > 0):
         # выбрать новую грань и ребро
         loop = choose_next_loop(bm, not_visited_face_id, grid_edges)
@@ -1298,8 +1300,11 @@ def go_all_grid_nonconcentric_areas(bm: BMesh, grid_edges: List[BMEdge], visited
                 # построить базовые кривые в гранях (уже в отдельной функции)
                 count_basic_vector_params(faces, loops, faces_to_vector_dict, bm)
 
+                # запись в общий результат обхода (для файла)
+                list_of_results.append(result)
+
     print("count of positive zones = " + str(max_index_positive))
-    return
+    return list_of_results
 
 ##############################################################################################################################################
 # -- функции построения векторов по обойденным петлям граней
@@ -1456,14 +1461,14 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
     faces_to_vector_dict = {} # словарь face_id : (p, q, main loop), где p и q - точки на третях средней линии грани -- тестовое
     
     # сбор колец неконцентрических областей и подсчет углов одновременно
-    go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_vector_dict, count_UV_coords_for_two_basic_verts_all_faces)
+    list_of_results = go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_vector_dict, count_UV_coords_for_two_basic_verts_all_faces)
 
     # подсчет углов концентрических областей
     for result in concentric_result:
         for edge_ring in result:
             faces, loops, idx_change_dir, not_quads = edge_ring
             count_UV_coords_for_two_basic_verts_all_faces(faces, loops, faces_to_vector_dict, bm)
-    return faces_to_vector_dict
+    return faces_to_vector_dict, list_of_results
 
 def make_vectors_from_dict(faces_to_vector_dict: dict, vector_bm: BMesh):
     '''
@@ -1551,10 +1556,10 @@ def filter_face_with_vectors(bm: BMesh, face: BMFace, face_to_vector_dict: dict,
             if (p_distance < q_distance):
                 vector = -vector
 
-            if (p_distance == q_distance):
+            #if (p_distance == q_distance):
                 # параллельный вектор - не учитывать при подсчете
-                # TODO переход к сбору смежных в очередь
-                break
+            #    # TODO переход к сбору смежных в очередь
+            #    break
 
             # вроде этого уже достаточно будет
             # даже сразу можно считать его вклад и не надо записывать в список
@@ -1674,10 +1679,10 @@ def filter_face_median(bm: BMesh, face: BMFace, face_to_vector_dict: dict, filte
             if (p_distance < q_distance):
                 vector = -vector
 
-            if (p_distance == q_distance):
+            #if (p_distance == q_distance):
                 # параллельный вектор - не учитывать при подсчете
-                # TODO переход к сбору смежных в очередь
-                break
+            #    # TODO переход к сбору смежных в очередь
+            #    break
 
             # вроде этого уже достаточно будет
             # даже сразу можно считать его вклад и не надо записывать в список
@@ -1751,7 +1756,8 @@ def filter_face_median(bm: BMesh, face: BMFace, face_to_vector_dict: dict, filte
     # поиск медианного угла в четверти
     max_quart_agles = quarts_dict[max_quart]
     # Здесь сортировать по произведению или же только по углу??
-    max_quart_agles.sort(key=lambda x: x[0]*x[1]*x[2])
+    #max_quart_agles.sort(key=lambda x: x[0]*x[1]*x[2])
+    max_quart_agles.sort(key=lambda x: x[0])
     median_len = len(max_quart_agles)
     if (median_len % 2 == 0):
         i : int = median_len // 2 - 1
@@ -1786,8 +1792,7 @@ def filter_vectors_for_mesh(bm: BMesh, face_to_vector_dict: dict, len_coeff: flo
         # подсчет нового угла с помощью фильтра для грани с id = key
         
         # ВОТ ТУТ ФИЛЬТР (мб передавать его как параметр)
-        #angle, basic_vector = filter_face_with_vectors(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
-        angle, basic_vector = filter_face_median(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
+        angle, basic_vector = filter_face_with_vectors(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
         
 
         #angle, ring_edge_loop = face_to_angle_dict[key]
@@ -1798,6 +1803,49 @@ def filter_vectors_for_mesh(bm: BMesh, face_to_vector_dict: dict, len_coeff: flo
         
         # запись в словарь face_id : (p, q)
         faces_to_vector_new_dict[key] = (p, q, loop_start_id)
+
+    return faces_to_vector_new_dict
+
+def filter_vectors_for_mesh_median_only_thin_rings(bm: BMesh, face_to_vector_dict: dict, len_coeff: float, layer_name: str, zone_to_priority_dict: dict, filter_params: List[int], list_of_results):
+    '''
+    Функция фильтрует каждую грань меша, получая усредненный угол (на основе значений базовых углов данной грани и смежных граней)
+    Затем ищет точки для вектора под таким углом для этой грани
+    Записывает вектора в словарь face_id: (p, q)
+    '''
+    faces_to_vector_new_dict = {}
+
+    for result in list_of_results:
+        # медианный фильтр применяем только к полосам/одиночным граням
+        if (len(result) != 1):
+            continue
+
+        # разворачиваем результат обхода одиночной грани/полосы
+        faces, loops, idx_change_dir = result[0]
+
+        # фильтруем
+        i = 0
+        for face in faces:
+
+            # TODO: краевые грани обрабатывать или нет?
+
+            face_id = face.index
+            loop_start = loops[i]
+            p_basic, q_basic, loop_start_id = face_to_vector_dict[face_id]
+
+             # ФИЛЬТР
+            angle, basic_vector = filter_face_median(bm, face, face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
+
+            # поворот базового вектора на вычисленный угол
+            p, q = count_UV_verts_in_face_with_angle_around_basic_vector(bm, loop_start, angle, len_coeff, basic_vector)
+        
+            faces_to_vector_new_dict[face_id] = (p, q, loop_start_id)
+            
+            i += 1
+
+    # дописываем в словарь базовые вектора граней, которые не затронул медианный фильтр
+    for key in face_to_vector_dict.keys():
+        if key not in faces_to_vector_new_dict:
+            faces_to_vector_new_dict[key] = face_to_vector_dict[key]
 
     return faces_to_vector_new_dict
 
@@ -1812,11 +1860,64 @@ def write_edge_grid(edge_grid: List[BMEdge], file_name: str):
 def read_edge_grid(file_name: str):
     return
 
-def write_result_collecting_rings(result, file_name: str):
+def write_result_collecting_rings(list_of_results, concentric_results, file_name: str):
+    
+   # for result in list_of_results:
+   #     for ring in result:
+   #         if len(ring) != 3:
+   #             print("start face for ring: " + str(ring[0].index))
+    # TODO: можно было бы просто не записывать в concentric_loop четвертую компоненту, тогда не нужен этот обход для форматирования
+    for result in concentric_results:
+        result_no_four_element = []
+        for edge_ring in result:
+            faces, loops, idx_change_dir, not_quads = edge_ring
+            result_no_four_element.append((faces, loops, idx_change_dir))
+        list_of_results.append(result_no_four_element)
+
+    # сериализация BMloop и BMFace до индексов
+    list_serialized = []
+    for result in list_of_results:
+        result_serialized = []
+        for edge_ring in result:
+            #print(len(edge_ring))
+            faces, loops, idx_change_dir = edge_ring
+            result_serialized.append(([face.index for face in faces], [loop.index for loop in loops], idx_change_dir))
+        list_serialized.append(result_serialized)
+
+    with open(file_name, 'w') as f:
+        f.write(json.dumps(list_serialized))
     return
 
-def read_result_collecting_ring(file_name: str):
-    return
+def read_result_collecting_ring(file_name: str, bm: BMesh):
+    '''
+    Функция считывает из файла результаты сборов перпендикулярных колец, где записаны индексы граней и луп вместо их как классов BMface, BMloop.
+    Затем она находит в меше грани и лупы по индексам и составляет список результатов, в котором участвуют уже они вместо индексов.
+    '''
+    
+    bm.faces.ensure_lookup_table()
+    list_of_results: List[Tuple[List[BMFace], List[BMLoop], int]] = []
+    with open(file_name) as f:
+        list_serialized = json.load(f)
+    for result_serialized in list_serialized:
+        result = []
+        for edge_ring in result_serialized:
+            faces_s, loops_s, idx_change_dir = edge_ring
+            
+            faces = []
+            for face_id in faces_s:
+                faces.append(bm.faces[face_id])
+
+            loops = []
+            for i in range(0, len(faces)):
+                loop_id = loops_s[i]
+                for loop in faces[i].loops:
+                    if loop.index == loop_id:
+                        loops.append(loop)
+                        break
+
+            result.append((faces, loops, idx_change_dir))
+        list_of_results.append(result)
+    return list_of_results
 
 def write_zones_dict(zones_dict: dict, file_name: str):
     with open(file_name, 'w') as f:
@@ -1932,6 +2033,11 @@ def main_make_pole_grid_and_basic_vectors():
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
+    bm.faces.ensure_lookup_table()
+  #  for face in bm.faces:
+  #      if face.select:
+  #          print(face.index)
+  #  return
 
     # сетка полюсов, обход концентров
     face_zones_layer_name = "zones_layer"
@@ -1940,12 +2046,15 @@ def main_make_pole_grid_and_basic_vectors():
         edge.select = True
     
     # базовые векторы для всего меша
-    faces_to_vector_dict = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
+    faces_to_vector_dict, list_of_results = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
     
     # постройка векторов
     vector_bm, vector_obj = make_vectormesh()
     make_vectors_from_dict(faces_to_vector_dict, vector_bm)
 
+    # запись в файл результатов обхода концентров и не концентров
+    results_file_name = "rings_collecting_results.json"
+    write_result_collecting_rings(list_of_results, concentric_result, results_file_name)
     # запись словаря векторов в файл
     file_name = "face_to_vector_dict.json"
     write_face_to_vector_dict(faces_to_vector_dict, file_name)
@@ -1966,6 +2075,13 @@ def main_filter_vectors_from_file():
     #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(mesh_obj.data)
+    bm.faces.ensure_lookup_table()
+ #   for face in bm.faces:
+ #       if face.select:
+ #           print(face.index)
+ #           if edge.index == 1:
+ #               print(face.index)
+ #   return
    # loops = bm.loops
    # loops_0 = bm.loops[0]
 
@@ -1984,12 +2100,22 @@ def main_filter_vectors_from_file():
 
     # достать словарь зон из файла
     zd_file_name = "zones_dict.json"
+    face_zones_layer_name = "zones_layer"
     zones_dict = read_zones_dict(zd_file_name)
 
-    # фильтры
-    face_zones_layer_name = "zones_layer"
+    # фильтр медианный
+    # -- достать результаты сбора перпендикулярных колец из файла
+    results_file_name = "rings_collecting_results.json"
+    list_of_results = read_result_collecting_ring(results_file_name, bm)
+    # -- применить медианный фильтр
+    median_filter_params = [1000, 0.1]
     len_coeff = 0.8
-    filter_params = [1000, 0.1, 0.02, 0.02, 0.01]
+  #  faces_to_vector_dict = filter_vectors_for_mesh_median_only_thin_rings(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, median_filter_params, list_of_results)
+
+    # фильтры векторные
+    len_coeff = 0.8
+    #filter_params = [1000, 0.1, 0.02, 0.02, 0.01]
+    filter_params = [1000, 0.1]
     faces_to_vector_dict = filter_vectors_for_mesh(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, filter_params)
     
 
@@ -2050,7 +2176,7 @@ def main_old_complex():
         edge.select = True
     
     #faces_to_angle = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
-    faces_to_vector_dict = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
+    faces_to_vector_dict, list_of_results = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, face_zones_layer_name, zones_dict, concentric_result)
     
     len_coeff = 0.8
     filter_params = [1000, 0.1, 0.02, 0.02, 0.01]
@@ -2087,7 +2213,7 @@ def main_old_complex():
 
 def main():
     
-    #main_make_pole_grid_and_basic_vectors()
+    main_make_pole_grid_and_basic_vectors()
     main_filter_vectors_from_file()
 
 def main_with_params():
