@@ -1771,6 +1771,216 @@ def filter_face_median(bm: BMesh, face: BMFace, face_to_vector_dict: dict, filte
 
     return -result, main_vector
 
+def filter_face_median_smart(bm: BMesh, face: BMFace, face_to_vector_dict: dict, filter_params: List[int], layer_name: str, zone_to_priority_dict: dict):
+    '''
+    Данный фильтр работает по тому же принципу, что и filter_face_with_vectors
+    - Форма
+    - BFS и параметры
+    - Подсчет угла для конкретного вектора из числа окружающих
+
+    Подсчет значения:
+    Значения углов для окружающих векторов сортируются. Сначала идет сортировка количеств векторов в четвертях.
+    Затем внутри медианной четверти выбирается медианное значение.
+    '''
+    # BFS с глубиной обхода = len(filter_params)
+
+    # для конкретной грани - достать ее зону из слоя, достать из словаря приоритет этой зоны
+    # считать общую сумму приоритетов зон и приоритетов фильтра
+    
+    face_zones_layer =  bm.faces.layers.int[layer_name]
+
+    depth = 0
+    max_depth = len(filter_params) - 1
+    queue = []
+    queue_faces = set()
+    visited_faces = set()
+    queue.append((face, depth))
+    queue_faces.add(face.index)
+    
+    main_p, main_q, loop = face_to_vector_dict[face.index]
+    main_vector: Vector = main_p - main_q
+    
+    # 0 - 1 четверть, 1 - 2 четвреть, ...
+    #count_angles_in_quarts = [0, 0, 0, 0] # число векторов в координатных четвертях
+    quarts_dict = {} # quart: [angles in quart]
+    quart_id = []
+    while(len(queue) > 0):
+        current_face, current_depth = queue.pop()
+        visited_faces.add(current_face.index)
+        queue_faces.remove(current_face.index)
+        
+        # подсчет вклада этой грани в угол
+        filter_priority = filter_params[current_depth]
+        
+        zone_index = bm.faces[current_face.index][face_zones_layer]
+        zone_priority = zone_to_priority_dict[zone_index]
+
+        p, q, ring_edge_loop = face_to_vector_dict[current_face.index]
+        vector = p - q
+
+        # основной вектор тоже участвует в BFS, но его мы пропускаем
+        if (current_depth != 0):
+            # в одной ли полуплоскости точки вектора (хз что делать из из разных)
+            # наверное, надо будет считать, какое из расстояний больше, и все равно в сторону большего направлять
+            # тогда и проверять не буду!
+
+            # найти ближнайшую из двух дочек к вектору
+            p_height_point, other = geometry.intersect_point_line(p, main_p, main_q)
+            q_height_point, other = geometry.intersect_point_line(q, main_p, main_q)
+
+            p_distance = (p - p_height_point).magnitude
+            q_distance = (q - q_height_point).magnitude
+
+            # сделать вектор от ближайшей к дальней точек
+
+            if (p_distance < q_distance):
+                vector = -vector
+
+            # ОБРАБОТКА КРАЕВЫХ СЛУЧАЕВ
+            # -- ПАРАМЕТР ТОЧНОСТИ
+            rel_tol = 1e-4
+            
+            #is_p_q_close = math.isclose(p_distance, q_distance, rel_tol=rel_tol)
+            #if (is_p_q_close):
+            # => вектор параллелен главной прямой, либо перпендикулярен и она пересекает его посередине
+
+            # вроде этого уже достаточно будет
+            # даже сразу можно считать его вклад и не надо записывать в список
+            angle = main_vector.angle_signed(vector)
+
+            # ~ 0 градусов (параллельность)
+            if isclose(angle, -math.radians(0), rel_tol=rel_tol) or isclose(angle, math.radians(0), rel_tol=rel_tol) or isclose(angle, -math.radians(180), rel_tol=rel_tol) or isclose(angle, math.radians(180), rel_tol=rel_tol):
+                    #center = (p + q) / 2
+                    #main_center = (main_p + main_q) / 2
+                    #if math.isclose(center, main_center, rel_tol):
+               # main_p_p_dist = (p - main_p).magnitude
+               # main_p_q_dist = (q - main_p).magnitude
+               # main_q_p_dist = (p - main_q).magnitude
+               # main_q_q_dist = (q - main_q).magnitude
+
+               # main_p_distances = main_p_p_dist + main_p_q_dist
+               # main_q_distances = main_q_q_dist + main_q_p_dist
+
+                # центр вектора находится на перпендикуляре из центра главного вектора
+               # if (math.isclose(main_p_distances, main_q_distances, rel_tol=rel_tol)):
+                    #quart_id = [0,1,2,3]
+               # elif main_p_distances < main_q_distances: 
+               #     quart_id = [0,3]
+               # else:
+               #     quart_id = [1,2]
+                quart_id = [0,1,2,3]
+                angle = 0
+            # верхняя полуплоскость
+            elif angle < 0:
+                # ~ 90 градусов
+                if isclose(angle, -math.radians(90), rel_tol=rel_tol):
+                    #if (is_p_q_close): # главная прямая пересекает этот вектор посередине
+                        # вектор вносит вклад во все четверти
+                    #    quart_id = [0,1,2,3]
+                    #else: # вектор вносит вклад в 1 и 2 четверти
+                    #    quart_id = [0,1]
+                    #    angle = math.radians(90)
+                    quart_id = [0,1,2,3]
+                    angle = math.radians(90)
+                elif angle < -math.radians(90.0):
+                    # поворот в положительную сторону, по часовой
+                    angle = (angle + math.radians(180.0))
+                    quart_id = [1]
+                else:
+                    # поворот в отрицательную сторону, против часовой
+                    angle = angle
+                    quart_id = [0]
+            # нижняя полуплоскость
+            else:
+                # ~ 90 градусов
+                if isclose(angle, math.radians(90), rel_tol=rel_tol):
+                    #if (is_p_q_close): # главная прямая пересекает этот вектор посередине
+                        # вектор вносит вклад во все четверти
+                    #    quart_id = [0,1,2,3]
+                    #else: # вектор вносит вклад в 3 и 4 четверти
+                    #    quart_id = [2,3]
+                    #    angle = math.radians(90)
+                    quart_id = [0,1,2,3]
+                    angle = math.radians(90)
+                elif angle > math.radians(90.0):
+                    # поворот в отрицательную сторону, против часовой
+                    angle = angle - math.radians(180.0)
+                    quart_id = [2]
+                else:
+                    # поворот в положительную сторону, по часовой
+                    angle = angle
+                    quart_id = [3]
+            if (len(quart_id) > 1):
+                # добавляем вектор в списки нескольких четвертей
+                for id in quart_id:
+                    # всегда положительный
+                    signed_angle = angle
+                    if (id == 0) or (id == 2):
+                        # это отрицательный четверти
+                        signed_angle = -angle
+                    if id not in quarts_dict:
+                        quarts_dict[id] = [(signed_angle, filter_priority, zone_priority)]
+                    else:
+                        prev_list = quarts_dict[id]
+                        prev_list.append((signed_angle, filter_priority, zone_priority))
+                        quarts_dict[id] = prev_list
+
+            else:
+                quart_id = quart_id[0]        
+                if quart_id not in quarts_dict:
+                    quarts_dict[quart_id] = [(angle, filter_priority, zone_priority)]
+                else:
+                    prev_list = quarts_dict[quart_id]
+                    prev_list.append((angle, filter_priority, zone_priority))
+                    quarts_dict[quart_id] = prev_list
+
+        # добавление смежных граней в очередь, если только мы не на максимальной глубине
+        if (current_depth == max_depth):
+            continue
+
+        # ~квадратный фильтр ()
+        for vert in current_face.verts:
+            for f in vert.link_faces:
+                if f.index in queue_faces:
+                    continue
+                if f.index in visited_faces:
+                    continue
+                queue.append((f, current_depth + 1))
+                queue_faces.add(f.index)
+    
+    if (len(quarts_dict.keys()) == 0):
+        return 0, main_vector
+    # поиск максимальной, а не медианной, четверти
+    max_quart = 0
+    max_count = -1
+    for key in quarts_dict.keys():
+        if (len(quarts_dict[key]) > max_count):
+            max_count = len(quarts_dict[key])
+            max_quart = key
+
+    # поиск медианного угла в четверти
+    max_quart_agles = quarts_dict[max_quart]
+    # Здесь сортировать по произведению или же только по углу??
+    max_quart_agles.sort(key=lambda x: x[0])
+    median_len = len(max_quart_agles)
+    if (median_len % 2 == 0):
+        i : int = median_len // 2 - 1
+        angle_1, f_pr_1, z_pr_1 = max_quart_agles[i]
+        i = median_len // 2
+        angle_2, f_pr_2, z_pr_2 = max_quart_agles[i]
+        result = (angle_1 * f_pr_1 * z_pr_1 + angle_2 * f_pr_2 * z_pr_2) / (f_pr_1 * z_pr_1 + f_pr_2 * z_pr_2)
+    else:
+        angle, f_pr, z_pr = max_quart_agles[median_len // 2]
+        result = angle
+    if (face.index == 3) or (face.index == 1):
+        print(quarts_dict)
+        print("face index: ")
+        print(face.index)
+        print("result: ")
+        print(result)
+        print('------------')
+    return -result, main_vector
+
 def filter_vectors_for_mesh(bm: BMesh, face_to_vector_dict: dict, len_coeff: float, layer_name: str, zone_to_priority_dict: dict, filter_params: List[int]):
     '''
     Функция фильтрует каждую грань меша, получая усредненный угол (на основе значений базовых углов данной грани и смежных граней)
@@ -1792,8 +2002,8 @@ def filter_vectors_for_mesh(bm: BMesh, face_to_vector_dict: dict, len_coeff: flo
         # подсчет нового угла с помощью фильтра для грани с id = key
         
         # ВОТ ТУТ ФИЛЬТР (мб передавать его как параметр)
-        angle, basic_vector = filter_face_with_vectors(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
-        
+        #angle, basic_vector = filter_face_with_vectors(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
+        angle, basic_vector = filter_face_median_smart(bm, bm.faces[key], face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
 
         #angle, ring_edge_loop = face_to_angle_dict[key]
         #angle = -math.radians(45.0)
@@ -1833,7 +2043,8 @@ def filter_vectors_for_mesh_median_only_thin_rings(bm: BMesh, face_to_vector_dic
             p_basic, q_basic, loop_start_id = face_to_vector_dict[face_id]
 
              # ФИЛЬТР
-            angle, basic_vector = filter_face_median(bm, face, face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
+            #angle, basic_vector = filter_face_median(bm, face, face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
+            angle, basic_vector = filter_face_median_smart(bm, face, face_to_vector_dict, filter_params, layer_name, zone_to_priority_dict)
 
             # поворот базового вектора на вычисленный угол
             p, q = count_UV_verts_in_face_with_angle_around_basic_vector(bm, loop_start, angle, len_coeff, basic_vector)
@@ -2081,7 +2292,7 @@ def main_filter_vectors_from_file():
  #           print(face.index)
  #           if edge.index == 1:
  #               print(face.index)
- #   return
+  #  return
    # loops = bm.loops
    # loops_0 = bm.loops[0]
 
@@ -2110,13 +2321,15 @@ def main_filter_vectors_from_file():
     # -- применить медианный фильтр
     median_filter_params = [1000, 0.1]
     len_coeff = 0.8
-  #  faces_to_vector_dict = filter_vectors_for_mesh_median_only_thin_rings(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, median_filter_params, list_of_results)
+    faces_to_vector_dict = filter_vectors_for_mesh_median_only_thin_rings(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, median_filter_params, list_of_results)
+    #faces_to_vector_dict = filter_vectors_for_mesh(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, median_filter_params)
+
 
     # фильтры векторные
     len_coeff = 0.8
     #filter_params = [1000, 0.1, 0.02, 0.02, 0.01]
     filter_params = [1000, 0.1]
-    faces_to_vector_dict = filter_vectors_for_mesh(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, filter_params)
+  #  faces_to_vector_dict = filter_vectors_for_mesh(bm, faces_to_vector_dict, len_coeff, face_zones_layer_name, zones_dict, filter_params)
     
 
     # постройка
@@ -2211,9 +2424,23 @@ def main_old_complex():
     # очистка памяти от bm
     bm.free()
 
+def isclose(angle1, angle2, rel_tol):
+    diff = abs(angle1 - angle2)
+    return diff < rel_tol
+
+
 def main():
-    
-    main_make_pole_grid_and_basic_vectors()
+   # rel_tol = 1e-8
+   # angle = 1.0041063802646022e-07
+   # diff = abs(angle - 0.0)
+   # kek = diff < rel_tol
+   # print(math.isclose(angle, -math.radians(0), rel_tol=rel_tol))
+   # print(math.isclose(angle, math.radians(0), rel_tol=rel_tol))
+   # print(math.isclose(angle, -math.radians(180), rel_tol=rel_tol))
+   # print(math.isclose(angle, math.radians(180), rel_tol=rel_tol))
+   # return
+             
+  #  main_make_pole_grid_and_basic_vectors()
     main_filter_vectors_from_file()
 
 def main_with_params():
