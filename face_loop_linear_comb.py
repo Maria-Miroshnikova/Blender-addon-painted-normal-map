@@ -2428,20 +2428,220 @@ def isclose(angle1, angle2, rel_tol):
     diff = abs(angle1 - angle2)
     return diff < rel_tol
 
+####################################################################################################################################################################
 
-def main():
-   # rel_tol = 1e-8
-   # angle = 1.0041063802646022e-07
-   # diff = abs(angle - 0.0)
-   # kek = diff < rel_tol
-   # print(math.isclose(angle, -math.radians(0), rel_tol=rel_tol))
-   # print(math.isclose(angle, math.radians(0), rel_tol=rel_tol))
-   # print(math.isclose(angle, -math.radians(180), rel_tol=rel_tol))
-   # print(math.isclose(angle, math.radians(180), rel_tol=rel_tol))
-   # return
-             
+def loop_magnitude(loop: BMLoop, uv_layer):
+    v1 = loop[uv_layer].uv
+    v2 = loop.link_loop_next[uv_layer].uv
+    return (v2 - v1).magnitude
+
+def make_points_in_grid_points(min_coeff, next_coeff, min_loop, uv_layer):
+    # считаем координаты в UV вершин грани
+    min_edge_v_1 = min_loop[uv_layer].uv
+    min_edge_v_2 = min_loop.link_loop_next[uv_layer].uv
+
+    min_edge_v_3 = min_loop.link_loop_next.link_loop_next[uv_layer].uv
+    min_edge_v_4 = min_loop.link_loop_prev[uv_layer].uv
+
+    points = []
+    for i in range (1, min_coeff + 1):
+        i_part_of_min_edge = (min_edge_v_1) + (i / (min_coeff + 1)) * (min_edge_v_2 - min_edge_v_1)
+        i_part_of_min_edge_opposite = (min_edge_v_4) + (i / (min_coeff + 1)) * (min_edge_v_3 - min_edge_v_4)
+
+        for j in range (1, next_coeff + 1):
+            v_ij = i_part_of_min_edge + (j / (next_coeff + 1)) * (i_part_of_min_edge_opposite - i_part_of_min_edge)
+            points.append(v_ij)
+    return points
+
+def make_points_in_grid_points_for_cells(min_coeff, next_coeff, min_loop, uv_layer):
+    # считаем координаты в UV вершин грани
+    min_edge_v_1 = min_loop[uv_layer].uv
+    min_edge_v_2 = min_loop.link_loop_next[uv_layer].uv
+
+    min_edge_v_3 = min_loop.link_loop_next.link_loop_next[uv_layer].uv
+    min_edge_v_4 = min_loop.link_loop_prev[uv_layer].uv
+
+    points = []
+    for i in range (0, min_coeff + 1):
+        i_part_of_min_edge = (min_edge_v_1) + (i / (min_coeff)) * (min_edge_v_2 - min_edge_v_1)
+        i_part_of_min_edge_opposite = (min_edge_v_4) + (i / (min_coeff)) * (min_edge_v_3 - min_edge_v_4)
+
+       # middle_line_i = i+i_part_of_min_edge + i_part_of_min_edge_opposite
+        row = []
+        for j in range (0, next_coeff + 1):
+            v_ij = i_part_of_min_edge + (j / (next_coeff)) * (i_part_of_min_edge_opposite - i_part_of_min_edge)
+            #points.append(v_ij)
+            row.append(v_ij)
+        points.append(row)
+    return points
+
+def make_points_in_grid_cells(min_coeff, next_coeff, min_loop, uv_layer):
+    # находим координаты узлов сетки
+    points_grid = make_points_in_grid_points_for_cells(min_coeff, next_coeff, min_loop, uv_layer)
+
+    points = []
+    for i in range(0, min_coeff):
+        for j in range(0, next_coeff):
+            center = (points_grid[i][j] + points_grid[i + 1][j + 1] + points_grid[i][j + 1] + points_grid[i + 1][j]) / 4
+            points.append(center)
+    return points
+
+
+def make_points_proportionally_to_face(face: BMFace, bm: BMesh, min_a: float, face_to_points_dict: dict):
+    '''
+    Функция для данной грани и минимального размера клетки min_a вычисляет координаты точек внутри грани для построения векторов в них.
+    Находится минимум сколько раз min_a помещается в минимальном ребре грани (min_coeff) и в минимальном из боковых ребер грани (next_coeff), затем
+    проводится min_coeff средних линий и next_coeff боковых средних линий. В узлах сетки средних линий и есть искомые точки.
+
+    координаты точек записываются в словарь face_id: List[Vectors]
+
+    !!! грань должна быть 4-угольной
+    
+    '''
+    # quart expected
+    uv_layer = bm.loops.layers.uv.verify()
+
+    # выбираем минимальное ребро
+    #min_edge = None
+    min_edge_len = float('inf')
+    min_loop = None
+    for loop in face.loops:
+        e_length = loop_magnitude(loop, uv_layer)
+        if e_length < min_edge_len:
+            min_edge_len = e_length
+            #min_edge = edge
+            min_loop = loop
+    # выбираем минимальное из боковых ребер
+    #next_min_edge = min_loop.link_loop_next.edge
+    next_loop = min_loop.link_loop_next
+    next_min_len = loop_magnitude(next_loop, uv_layer)
+    prev_min_len = loop_magnitude(min_loop.link_loop_prev, uv_layer)
+    if (prev_min_len < next_min_len):
+        next_min_len = prev_min_len
+        #next_min_edge = min_loop.link_loop_prev.edge
+        next_loop = min_loop.link_loop_prev
+
+    min_coeff = math.floor(min_edge_len / min_a)
+    next_coeff = math.floor(next_min_len / min_a)
+
+    points = make_points_in_grid_cells(min_coeff, next_coeff, min_loop, uv_layer)
+
+   # face_to_points_dict[face.index] = points
+    return len(points), points
+
+def make_point_on_face(face: BMFace, bm: BMesh, min_a: float, face_to_points_dict: dict):
+    # quart expected
+    uv_layer = bm.loops.layers.uv.verify()
+
+    center = Vector((0, 0))
+    for loop in face.loops:
+        center += loop[uv_layer].uv
+    
+    center /= 4
+
+    face_to_points_dict[face.index] = [center]
+    return
+
+import random
+
+def make_vector_in_point(point: Vector, length: float):
+
+    angle = random.uniform(-90, 90) # RANDOM [-90, 90]
+
+    vector_1 = Vector((0, length / 2))
+    vector_2 = Vector((0, length / 2))
+    rotation_1 = Matrix.Rotation(angle, 2, 'X')
+  #  if angle == 0:
+  #      rotation_2 = Matrix.rotate(math.radians(180), 2, 'X')
+    rotation_2 = Matrix.Rotation(angle + math.radians(180), 2, 'X')
+    vector_1.rotate(rotation_1)
+    vector_2.rotate(rotation_2)
+
+    p = point + vector_1
+    q = point + vector_2
+
+    return p, q
+
+def generate_random_vectors_on_mash_with_face_area_proportionality(bm: BMesh, vector_bm: BMesh, len_coeff: float, min_a = None):
+    '''
+    min_a - насколько много точек генерировать в гранях
+    len_coeff - насколько длинными делать векторы в этих точках. Минимальная длина будет min_a, модификатор * len_coeff из промежутка (0, +00)
+    
+    '''
+    
+    # если минимальный размер не задали, найдем минимальное ребро и возьмем его длину
+    if (min_a == None):
+        uv_layer = bm.loops.layers.uv.verify()
+
+        min_a = float('inf')
+        #for edge in bm.edges:
+        #    e_len = edge.calc_length()
+        #    if e_len < min_a:
+        #        min_a = e_len
+        # TODO мб можно все же не копаться на уровне loop а узнать коэффициент масштабирования при переходе к UV?
+        # -- скорее всего нет, т. к. разные ребро по-разному сжимаются
+        for face in bm.faces:
+            for loop in face.loops:
+                e_len = loop_magnitude(loop, uv_layer)
+                if e_len < min_a:
+                    min_a = e_len
+
+    face_to_points_dict = {}
+
+    i = 0
+    count = 0
+    for face in bm.faces:
+        if (is_quad(face)):
+            count_local, points = make_points_proportionally_to_face(face, bm, min_a, face_to_points_dict)
+            count += count_local
+
+            for point in points:
+                p, q = make_vector_in_point(point, len_coeff * min_a)
+                create_and_add_vector_to_vectormesh(vector_bm, p, q)
+
+            #make_point_on_face(face, bm, min_a, face_to_points_dict)
+            if (i % 10 == 0):
+                print("made " + str(i) + "/" + str(len(bm.faces)) + ", points created: " + str(count))
+            i += 1
+    print("Done with calculation 1")
+    return
+    print("------------------------------")
+    i = 0
+    for id in face_to_points_dict.keys():
+        points = face_to_points_dict[id]
+        for point in points:
+            p, q = make_vector_in_point(point, len_coeff * min_a)
+            create_and_add_vector_to_vectormesh(vector_bm, p, q)
+        if (i % 40 == 0):
+                print("create " + str(i) + "/" + str(count))
+        i += len(points)
+    print("Done with creation 2")
+    return
+
+def main_random_vectors():
+     #--- EDIT MODE!
+    mesh_obj = bpy.context.active_object
+    bm = bmesh.from_edit_mesh(mesh_obj.data)
+
+     # постройка векторов
+    vector_bm, vector_obj = make_vectormesh()
+    len_coeff = 1
+   # min_a = 0.4
+   # generate_random_vectors_on_mash_with_face_area_proportionality(bm, vector_bm, len_coeff, min_a)
+    generate_random_vectors_on_mash_with_face_area_proportionality(bm, vector_bm, len_coeff)
+
+
+    # чистка
+    vector_bm.to_mesh(vector_obj.data)
+    vector_obj.data.update()
+    vector_bm.free()
+    bmesh.update_edit_mesh(mesh_obj.data)
+    bm.free()
+
+def main():             
   #  main_make_pole_grid_and_basic_vectors()
-    main_filter_vectors_from_file()
+  #  main_filter_vectors_from_file()
+  main_random_vectors()
 
 def main_with_params():
     ######## главные параметры для создания строкмешей!
