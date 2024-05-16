@@ -2564,6 +2564,7 @@ def make_vector_in_point(point: Vector, length: float):
     #vector_1.rotate(rotation_1)
     #vector_2.rotate(rotation_2)
 
+    # эта версия создает p и q на равном расстоянии от point, она становится центром вектора pq
     p = point + vector_1
     q = point + vector_2
 
@@ -2640,6 +2641,81 @@ def generate_random_vectors_on_mash_with_face_area_proportionality(bm: BMesh, ve
     print("Done with creation 2")
     return
 
+def get_uv_boundary_coords(uv_bm: BMesh):
+    '''
+    Функция для поиска крайних координат в uv развертке.
+    Функция просматривает все краевые точки меша, записывает их uv координаты в список.
+    Затем список сортируется по х и по у отдельно.
+    Функция возвращает минимальные и максимальные х, у
+    '''
+    uv_layer = uv_bm.loops.layers.uv.verify()
+    
+    boundary_verts_uv = []
+    for vert in uv_bm.verts:
+        for loop in vert.link_loops:
+            if loop.edge.is_boundary:
+                boundary_verts_uv.append(loop[uv_layer].uv)
+
+    sort_x = sorted(boundary_verts_uv, key = lambda x: x[0])
+    sort_y = sorted(boundary_verts_uv, key = lambda x: x[1])
+    return sort_x[0][0], sort_x[-1][0], sort_y[0][1], sort_y[-1][1]
+
+def make_grid_for_random_vectors(bm: BMesh, uv_obj: Object, uv_bm: BMesh, step: float, distortion: float):
+    min_x, max_x, min_y, max_y = get_uv_boundary_coords(uv_bm)
+    z = 1
+
+    distortion_radius = distortion / 2
+
+    points = []
+    x = min_x
+    while (x < max_x):
+        y = min_y
+        while(y < max_y):
+            current_distortion_x = random.uniform(-distortion_radius, distortion_radius)
+            current_distortion_y = random.uniform(-distortion_radius, distortion_radius)
+            x_dstr = x + current_distortion_x
+            y_dstr = y + current_distortion_y
+            point = Vector((x_dstr, y_dstr))
+            origin = Vector((x_dstr, y_dstr, z))
+            end = Vector((x_dstr, y_dstr, 0))
+            direction = end - origin
+
+            # перевод в локальные координаты. скорее всего это не нужно, т к должны совпадать uv оригинального объекта и сам uv obj (искусственная развертка)
+            #mw = uv_obj.matrix_world
+            #mwi = mw.inverted()
+            #origin = mwi @ origin
+            #dest = mwi @ end
+            #direction = (dest - origin).normalized()
+            
+            result, location, normal, index = uv_obj.ray_cast(origin=origin, direction=direction)
+            if (result): # точка находится над гранями развертки!
+               points.append(point)
+            #points.append(point)
+            y += step
+        x += step 
+    return points
+
+def generate_random_vectors_on_mash_with_face_area_proportionality_grid_based(bm: BMesh, vector_bm: BMesh,
+                                                                              uv_obj: Object, uv_bm: BMesh,
+                                                                              len_coeff: float = 0.001, min_a: float = 0.02,
+                                                                              distortion: float = 0.015):
+    # TODO добавить случайные отклонения от сетки
+    
+    # если минимальный размер не задали, найдем минимальное ребро и возьмем его длину
+    #if (min_a == None):
+    #    min_a = get_edge_size_statistics(bm)
+
+    vecotr_length = len_coeff
+
+    points = make_grid_for_random_vectors(bm, uv_obj, uv_bm, min_a, distortion)
+
+    print("made grid points!")
+
+    for point in points:
+        p, q = make_vector_in_point(point, vecotr_length)
+        create_and_add_vector_to_vectormesh(vector_bm, p, q)
+
+
 def main_random_vectors():
      #--- EDIT MODE!
     mesh_obj = bpy.context.active_object
@@ -2647,11 +2723,18 @@ def main_random_vectors():
 
      # постройка векторов
     vector_bm, vector_obj = make_vectormesh()
-    len_coeff = 1
+   # len_coeff = 1
    # min_a = 0.4
    # generate_random_vectors_on_mash_with_face_area_proportionality(bm, vector_bm, len_coeff, min_a)
-    generate_random_vectors_on_mash_with_face_area_proportionality(bm, vector_bm, len_coeff)
+   # generate_random_vectors_on_mash_with_face_area_proportionality(bm, vector_bm, len_coeff)
 
+    uv_object_name = "uv_0"
+    uv_obj = bpy.data.objects[uv_object_name]
+    uv_mesh = bpy.data.meshes[uv_object_name]
+    uv_bm = bmesh.new()
+    uv_bm.from_mesh(uv_mesh)
+
+    generate_random_vectors_on_mash_with_face_area_proportionality_grid_based(bm, vector_bm, uv_obj, uv_bm)
 
     # чистка
     vector_bm.to_mesh(vector_obj.data)
@@ -2659,6 +2742,7 @@ def main_random_vectors():
     vector_bm.free()
     bmesh.update_edit_mesh(mesh_obj.data)
     bm.free()
+    uv_bm.free()
 
 def main():             
   #  main_make_pole_grid_and_basic_vectors()
