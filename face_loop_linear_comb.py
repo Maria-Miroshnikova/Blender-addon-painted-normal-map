@@ -2522,11 +2522,15 @@ def make_points_proportionally_to_face(face: BMFace, bm: BMesh, min_a: float, fa
         next_loop = min_loop.link_loop_prev
 
     min_coeff = math.floor(min_edge_len / min_a)
+
+    if min_coeff == 0:
+        return 0, []
+
     next_coeff = math.floor(next_min_len / min_a)
 
     points = make_points_in_grid_cells(min_coeff, next_coeff, min_loop, uv_layer)
 
-   # face_to_points_dict[face.index] = points
+    face_to_points_dict[face.index] = points
     return len(points), points
 
 def make_point_on_face(face: BMFace, bm: BMesh, min_a: float, face_to_points_dict: dict):
@@ -2546,21 +2550,49 @@ import random
 
 def make_vector_in_point(point: Vector, length: float):
 
-    angle = random.uniform(-90, 90) # RANDOM [-90, 90]
+    angle_gr = random.uniform(-90, 90) # RANDOM [-90, 90]
+    angle = math.radians(angle_gr)
 
-    vector_1 = Vector((0, length / 2))
-    vector_2 = Vector((0, length / 2))
-    rotation_1 = Matrix.Rotation(angle, 2, 'X')
-  #  if angle == 0:
-  #      rotation_2 = Matrix.rotate(math.radians(180), 2, 'X')
-    rotation_2 = Matrix.Rotation(angle + math.radians(180), 2, 'X')
-    vector_1.rotate(rotation_1)
-    vector_2.rotate(rotation_2)
+    cos = math.cos(angle)
+    sin = math.sin(angle)
+    vector_1 = Vector((length * cos, length * sin))
+    vector_2 = -vector_1
+    #vector_1 = Vector((0, length / 2))
+    #vector_2 = Vector((0, length / 2))
+    #rotation_1 = Matrix.Rotation(angle, 2, 'X')
+    #rotation_2 = Matrix.Rotation(angle + math.radians(180), 2, 'X')
+    #vector_1.rotate(rotation_1)
+    #vector_2.rotate(rotation_2)
 
     p = point + vector_1
     q = point + vector_2
 
     return p, q
+
+def get_edge_size_statistics(bm: BMesh):
+    uv_layer = bm.loops.layers.uv.verify()
+    edge_sizes = []
+    visited_edges = set()
+    for face in bm.faces:
+        for loop in face.loops:
+            edge = loop.edge
+            if edge.index in visited_edges:
+                continue
+            visited_edges.add(edge.index)
+
+            e_len = loop_magnitude(loop, uv_layer)
+            edge_sizes.append(e_len)
+
+    edge_sizes.sort()
+    min_size = edge_sizes[0]
+    max_size = edge_sizes[-1]
+
+    # отбрасывание слишком мелких граней
+    floor = 0.05 # какой процент граней не рассматриваем
+    idx_floor = math.floor(len(edge_sizes) * floor)
+    
+    min_a = edge_sizes[idx_floor]
+    return min_a
 
 def generate_random_vectors_on_mash_with_face_area_proportionality(bm: BMesh, vector_bm: BMesh, len_coeff: float, min_a = None):
     '''
@@ -2571,22 +2603,10 @@ def generate_random_vectors_on_mash_with_face_area_proportionality(bm: BMesh, ve
     
     # если минимальный размер не задали, найдем минимальное ребро и возьмем его длину
     if (min_a == None):
-        uv_layer = bm.loops.layers.uv.verify()
-
-        min_a = float('inf')
-        #for edge in bm.edges:
-        #    e_len = edge.calc_length()
-        #    if e_len < min_a:
-        #        min_a = e_len
-        # TODO мб можно все же не копаться на уровне loop а узнать коэффициент масштабирования при переходе к UV?
-        # -- скорее всего нет, т. к. разные ребро по-разному сжимаются
-        for face in bm.faces:
-            for loop in face.loops:
-                e_len = loop_magnitude(loop, uv_layer)
-                if e_len < min_a:
-                    min_a = e_len
+        min_a = get_edge_size_statistics(bm)
 
     face_to_points_dict = {}
+    vecotr_length = len_coeff * min_a
 
     i = 0
     count = 0
@@ -2595,26 +2615,28 @@ def generate_random_vectors_on_mash_with_face_area_proportionality(bm: BMesh, ve
             count_local, points = make_points_proportionally_to_face(face, bm, min_a, face_to_points_dict)
             count += count_local
 
-            for point in points:
-                p, q = make_vector_in_point(point, len_coeff * min_a)
-                create_and_add_vector_to_vectormesh(vector_bm, p, q)
+            #for point in points:
+            #    p, q = make_vector_in_point(point, vecotr_length)
+            #    create_and_add_vector_to_vectormesh(vector_bm, p, q)
 
             #make_point_on_face(face, bm, min_a, face_to_points_dict)
-            if (i % 10 == 0):
-                print("made " + str(i) + "/" + str(len(bm.faces)) + ", points created: " + str(count))
-            i += 1
+            #if (i % 10 == 0):
+            #    print("made " + str(i) + "/" + str(len(bm.faces)) + ", points created: " + str(count))
+            #i += 1
     print("Done with calculation 1")
-    return
+    #return
     print("------------------------------")
     i = 0
+    iter = 0
     for id in face_to_points_dict.keys():
         points = face_to_points_dict[id]
         for point in points:
-            p, q = make_vector_in_point(point, len_coeff * min_a)
+            p, q = make_vector_in_point(point, vecotr_length)
             create_and_add_vector_to_vectormesh(vector_bm, p, q)
-        if (i % 40 == 0):
-                print("create " + str(i) + "/" + str(count))
+        if (iter % 10 == 0):
+                print("iteration " + str(iter) + "/" + str(len(face_to_points_dict)) + "; create " + str(i) + "/" + str(count))
         i += len(points)
+        iter += 1
     print("Done with creation 2")
     return
 
