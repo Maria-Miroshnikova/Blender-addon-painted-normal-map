@@ -204,6 +204,8 @@ def get_uv_boundary_coords(uv_bm: BMesh):
     sort_y = sorted(boundary_verts_uv, key = lambda x: x[1])
     return sort_x[0][0], sort_x[-1][0], sort_y[0][1], sort_y[-1][1]
 
+
+# CHANGED
 def make_grid_for_random_vectors(bm: BMesh, uv_obj: Object, uv_bm: BMesh, step: float, distortion: float,
                                  min_x, max_x, min_y, max_y):
     z = 1
@@ -239,6 +241,8 @@ def make_grid_for_random_vectors(bm: BMesh, uv_obj: Object, uv_bm: BMesh, step: 
         x += step 
     return points
 
+
+# CHANGED
 def generate_random_vectors_on_mash_with_face_area_proportionality_grid_based(bm: BMesh, vector_bm: BMesh,
                                                                               uv_obj: Object, uv_bm: BMesh,
                                                                               len_coeff: float = 0.001, min_a_coeff: float = 0.02,
@@ -300,6 +304,7 @@ def main_random_vectors():
 
     #############################################################################################################################################################
 
+# CHANGED
 def convert_mesh_to_curve_and_make_poly(strokes_obj: Object, mesh_obj: Object):
     '''
     Конвертирование в кривую и установка типа "poly curve"
@@ -408,8 +413,10 @@ class RandomVectorsProps(PropertyGroup):
 class RandomVectors(Operator):
     '''
     Для выбранного объекта (в EDIT MODE) и назначенной вручную
-    искусственной развертки этого объекта
-    создает множество векторов над uv разверткой типа poly curve
+    искусственной развертки этого объекта (с APPLIED geonode-развертыванием!!!!!!!)
+    создает множество векторов над uv разверткой
+
+    TODO: автоматизировать конвертацию в poly curve (необходимо разобраться с контекстами)
     
     (для последующего подключения geomentry nodes
     с генерацией штрихов вдоль направляющих кривых)
@@ -473,10 +480,6 @@ class RandomVectors(Operator):
         self.create_random_vectors()
         
         return {'FINISHED'}
-
-
-
-
 
 classes = [
     RandomVectorsProps,
