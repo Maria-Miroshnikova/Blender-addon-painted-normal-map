@@ -2698,12 +2698,11 @@ def make_grid_for_random_vectors(bm: BMesh, uv_obj: Object, uv_bm: BMesh, step: 
 def generate_random_vectors_on_mash_with_face_area_proportionality_grid_based(bm: BMesh, vector_bm: BMesh,
                                                                               uv_obj: Object, uv_bm: BMesh,
                                                                               len_coeff: float = 0.001, min_a: float = 0.02,
-                                                                              distortion: float = 0.015):
-    # TODO добавить случайные отклонения от сетки
+                                                                              distortion: float = None):
     
-    # если минимальный размер не задали, найдем минимальное ребро и возьмем его длину
-    #if (min_a == None):
-    #    min_a = get_edge_size_statistics(bm)
+    # можно сделать distortion ручным
+    if (distortion == None):
+        distortion = min_a * 0.75
 
     vecotr_length = len_coeff
 
@@ -2729,7 +2728,7 @@ def main_random_vectors():
    # generate_random_vectors_on_mash_with_face_area_proportionality(bm, vector_bm, len_coeff)
 
     uv_object_name = "uv_0"
-    uv_obj = bpy.data.objects[uv_object_name]
+    uv_obj: Object = bpy.data.objects[uv_object_name]
     uv_mesh = bpy.data.meshes[uv_object_name]
     uv_bm = bmesh.new()
     uv_bm.from_mesh(uv_mesh)
