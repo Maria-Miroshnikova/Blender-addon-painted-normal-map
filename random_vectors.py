@@ -262,3 +262,5 @@ def main_random_vectors():
     bmesh.update_edit_mesh(mesh_obj.data)
     bm.free()
     uv_bm.free()
+
+    
