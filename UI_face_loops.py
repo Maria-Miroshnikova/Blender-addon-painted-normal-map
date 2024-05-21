@@ -1320,12 +1320,6 @@ def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME:
 
 '''
 Кнопки:
-    - выбор объекта uv_obj -> OBJECT
-    - размер сетки step (min_a в алгоритме) -> FLOAT (default =)
-    - длина векторов vector_size (len_coeff в алгоритме) -> FLOAT (default = 0.02)
-    (они должни быть близки к 0, но можно для визуализации делать их длиннее)
-    - отклонение от узлов сетки distortion -> FLOAT (default = 0, soft_max = vector_size) 
-    - кнопка оператора
 '''
 
 class OBJECT_PT_FaceLoopsCurvesPanel(Panel):
