@@ -688,7 +688,7 @@ def make_symmetrical_loop_list(symm_face_ring: List[BMFace], idx_change_dir: int
     и от collect_..._nocross, изменение логики в этих функциях приведет к поломке данной функции!
     '''
     symm_loop_ring = []
-    start_loop = get_start_loop_from_face_ring(symm_face_ring)
+    start_loop = get_start_loop_from_face_ring(symm_face_ring, idx_change_dir)
     if start_loop is None:
         return symm_loop_ring
     
@@ -720,7 +720,7 @@ def make_symmetrical_loop_list(symm_face_ring: List[BMFace], idx_change_dir: int
     assert(len(symm_loop_ring) == len_ring)
     return symm_loop_ring
 
-def get_start_loop_from_face_ring(symm_face_ring: List[BMFace]):
+def get_start_loop_from_face_ring(symm_face_ring: List[BMFace], idx_change_dir):
     # определить лупу можно по двум последовательным граням
     # а если грань в списке всего одна? тогда будет строиться точка. Для функции process_uv_... этого вполне хватит, пустой список.
     # loop нужны для проверки связности двух квад в uv развертке, а если у нас всего она квада, то это и не нужно.
@@ -743,6 +743,9 @@ def get_start_loop_from_face_ring(symm_face_ring: List[BMFace]):
     start_loop = start_edge.link_loops[0]
     if (start_loop.face == face2):
         start_loop = start_edge.link_loops[1]
+    # TODO проверить. баг с нехваткой следующих двух строчек был найден при тестировании polegrid
+    if (idx_change_dir == 0):
+        start_loop = start_loop.link_loop_next.link_loop_next
     assert(start_loop.face == face1)
     return start_loop
 

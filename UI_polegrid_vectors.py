@@ -1611,6 +1611,13 @@ def create_and_add_vector_to_vectormesh(vectormesh: BMesh, v1: Vector, v2: Vecto
 def  count_UV_coords_for_two_basic_verts_all_faces(faces: List[BMFace], loops: List[BMLoop], faces_to_vector_dict: dict, bm: BMesh, len_coeff: float):
     for loop in loops:
                 p, q = count_UV_coords_for_two_basic_verts_in_face(loop, loop.link_loop_next.link_loop_next, bm, len_coeff)
+                #if ((loop.face.index in faces_to_vector_dict)):
+                    #bm.faces[loop.face.index].select = True
+                    #loop.edge.select = True
+                   # print("double keys in dict: " + str(loop.face.index))
+                   # print("current value: " + str(faces_to_vector_dict[loop.face.index]))
+                   # print("new value: " + str((p, q, loop.index)))
+                   # print("----------------")
                 faces_to_vector_dict[loop.face.index] = (p, q, loop.index)
 
 def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zones_dict: dict,
@@ -1629,8 +1636,8 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
             if (key in left_faces_id) or (key in rigth_faces_id):
                 continue
 
-            if not (is_quad(bm.faces[key])):
-                continue
+            #if not (is_quad(bm.faces[key])):
+            #    continue
             center = bm.faces[key].calc_center_median()
             if (center.x < 0):
                 left_faces_id.add(key)
@@ -1638,26 +1645,77 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
             else:
                 left_faces_id.add(symm_dict[key])
                 rigth_faces_id.add(key)
+        
+        #for key in left_faces_id:
+        #    bm.faces[key].select = True
+
         if (use_left_side):
             visited_faces_id = visited_faces_id.union(rigth_faces_id)
         else:
-            visited_faces_id = visited_faces_id.union(left_faces_id)   
+            visited_faces_id = visited_faces_id.union(left_faces_id)
+
+   # for face in bm.faces:
+    #    if face.select:
+     #       symm = symm_dict[face.index]
+     #       bm.faces[symm].select = True
 
     faces_to_vector_dict = {} # словарь face_id : (p, q, main loop), где p и q - точки на третях средней линии грани -- тестовое
     
     # сбор колец неконцентрических областей и подсчет углов одновременно
     list_of_results = go_all_grid_nonconcentric_areas(bm, grid_edges, visited_faces_id, layer_name, zones_dict, faces_to_vector_dict, count_UV_coords_for_two_basic_verts_all_faces, len_coeff)
     
+    #for key in faces_to_vector_dict.keys():
+    #    bm.faces[key].select = True
+    
+    #return {}, []
+
+   # check_faces = set()
+   # for face in bm.faces:
+   #     if face.select:
+   #         check_faces.add(face)
+
     # получение симметричного результата для второй половины и построение базы в нем
     if (use_symmetry):
+        list_symm_results = []
         for result in list_of_results:
-            symm_result = loops_for_loop_by_edge_nocross_for_symmetry(list_of_results, symm_dict, bm)
+           # show_area = False
+           # for ring in result:
+           #     faces, loops, id = ring
+           #     for face in faces:
+          #          if (face in check_faces):
+            #            print(face.index)
+            #            show_area = True
             # подсчет углов симметричной области
-            for edge_ring in symm_result:
-                faces, loops, idx_change_dir = edge_ring
+            symm_result = loops_for_loop_by_edge_nocross_for_symmetry(result, symm_dict, bm)
+            #assert(len(result) == len(symm_result))
+            for ring in result:
+                faces, loops, id = ring
+                #if (show_area):
+                   # loops[0].edge.select = True
+                    #faces[0].select = True
+                  #  faces[1].select = True
+                    #print("orig idx: " + str(id))
+                   # for face in faces:
+                     #   face.select = True
+            #    for face in faces:
+            #        face.select = True
+            for ring in symm_result:
+                faces, loops, idx_change_dir = ring
+                #if (show_area):
+                  #  loops[0].edge.select = True
+                    #faces[0].select = True
+                  #  faces[1].select = True
+                   # print("orig idx: " + str(idx_change_dir))
+                  #  for face in faces:
+                    #    face.select = True
+                #for face in faces:
+                #    face.select = True
                 count_UV_coords_for_two_basic_verts_all_faces(faces, loops, faces_to_vector_dict, bm, len_coeff)
-            list_of_results.append(symm_result) # для записи в файл
+            #print("-------------")
+            list_symm_results.append(symm_result) # для записи в файл
 
+        list_of_results.extend(list_symm_results)
+#    return {}, []
 
     
     # подсчет углов концентрических областей
@@ -2597,8 +2655,12 @@ def loops_for_loop_by_edge_nocross_for_symmetry(list_orto_rings: List[Tuple[List
     for idx, item in enumerate(list_orto_rings):
         (faces_in_loop, loops, change_direction_face) = item
         symm_face_ring = make_symmetrical_face_list(faces_in_loop, bm, symm_dict)
+        #for face in faces_in_loop:
+        #    face.select = True
         symm_loop_ring = make_symmetrical_loop_list(symm_face_ring, change_direction_face, len(loops))
         symm_list_orto_rings.append([symm_face_ring, symm_loop_ring, change_direction_face])
+        assert(len(symm_face_ring) == len(faces_in_loop))
+        assert(len(symm_loop_ring) == len(loops))
     return symm_list_orto_rings
 
 def make_symmetrical_face_list(faces_in_ring: List[BMFace], bm: BMesh, symm_dict: dict):
@@ -2626,7 +2688,7 @@ def make_symmetrical_loop_list(symm_face_ring: List[BMFace], idx_change_dir: int
     и от collect_..._nocross, изменение логики в этих функциях приведет к поломке данной функции!
     '''
     symm_loop_ring = []
-    start_loop = get_start_loop_from_face_ring(symm_face_ring)
+    start_loop = get_start_loop_from_face_ring(symm_face_ring, idx_change_dir)
     if start_loop is None:
         return symm_loop_ring
     
@@ -2658,7 +2720,7 @@ def make_symmetrical_loop_list(symm_face_ring: List[BMFace], idx_change_dir: int
     assert(len(symm_loop_ring) == len_ring)
     return symm_loop_ring
 
-def get_start_loop_from_face_ring(symm_face_ring: List[BMFace]):
+def get_start_loop_from_face_ring(symm_face_ring: List[BMFace], idx_change_dir):
     # определить лупу можно по двум последовательным граням
     # а если грань в списке всего одна? тогда будет строиться точка. Для функции process_uv_... этого вполне хватит, пустой список.
     # loop нужны для проверки связности двух квад в uv развертке, а если у нас всего она квада, то это и не нужно.
@@ -2673,6 +2735,10 @@ def get_start_loop_from_face_ring(symm_face_ring: List[BMFace]):
         return None
     face1 = symm_face_ring[0]
     face2 = symm_face_ring[1]
+
+    #face1.select = True
+    #face2.select = True
+
     start_edge: BMEdge | None = None
     for edge in face1.edges:
         if edge in face2.edges:
@@ -2681,81 +2747,10 @@ def get_start_loop_from_face_ring(symm_face_ring: List[BMFace]):
     start_loop = start_edge.link_loops[0]
     if (start_loop.face == face2):
         start_loop = start_edge.link_loops[1]
+    if (idx_change_dir == 0):
+        start_loop = start_loop.link_loop_next.link_loop_next
     assert(start_loop.face == face1)
     return start_loop
-
-def make_symmetrical_face_list(faces_in_ring: List[BMFace], bm: BMesh, symm_dict: dict):
-    '''
-    Эта функция получает на вход список граней и возвращает список симметричных им граней
-    TODO Можно переделать на чисто списки id для эффективности?
-    '''
-    symm_face_ring = []
-    for face in faces_in_ring:
-        symm_face_id = symm_dict[face.index]
-        symm_face_ring.append(bm.faces[symm_face_id])
-    return symm_face_ring
-
-def make_symmetrical_loop_list(symm_face_ring: List[BMFace], idx_change_dir: int, len_ring: int):
-     # определить лупу можно по двум последовательным граням
-    # а если грань в списке всего одна? тогда будет строиться точка. Для функции process_uv_... этого вполне хватит, пустой список.
-    # loop нужны для проверки связности двух квад в uv развертке, а если у нас всего она квада, то это и не нужно.
-    '''
-    Эта функция получает на вход список луп и возвращает список симметричных луп
-    Лупы получаются при обходе данного списка граней в данном порядке
-    с помощью прыжков по общим ребрам и radial переходов
-    loop (start) -> radial.next.next --- переход как в функции collect_..._nocross
-    Для определения луп используется список симметричных граней
-    Функция жестко зависит от устройства функции add_vertices_made_in_line_with_island_connectivity
-    и от collect_..._nocross, изменение логики в этих функциях приведет к поломке данной функции!
-    '''
-    symm_loop_ring = []
-    start_loop = get_start_loop_from_face_ring(symm_face_ring)
-    if start_loop is None:
-        return symm_loop_ring
-    
-    # зацикленное кольцо
-    if (idx_change_dir == -1):
-        loop = start_loop
-        for i in range(0, len_ring):
-            symm_loop_ring.append(loop)
-            next_loop = loop.link_loop_radial_next.link_loop_next.link_loop_next
-            loop = next_loop
-        assert(len(symm_loop_ring) == len_ring)
-        return symm_loop_ring
-
-
-    # ход в одну сторону
-    loop = start_loop
-    for i in range(0, idx_change_dir + 1):
-        symm_loop_ring.append(loop)
-        next_loop = loop.link_loop_radial_next.link_loop_next.link_loop_next
-        loop = next_loop
-    
-    # ход в обратную сторону
-    loop = start_loop.link_loop_next.link_loop_next
-    for i in range(idx_change_dir + 1, len_ring):
-        symm_loop_ring.append(loop.link_loop_radial_next)
-        next_loop = loop.link_loop_radial_next.link_loop_next.link_loop_next
-        loop = next_loop
-    
-    assert(len(symm_loop_ring) == len_ring)
-    return symm_loop_ring
-
-# вызывать для второй половины ИЗОЛИРОВАННОЙ
-def loops_for_loop_by_edge_nocross_for_symmetry(list_orto_rings: List[Tuple[List[BMFace], List[BMLoop], int]], symm_dict: dict, bm: BMesh):
-    '''
-    Функция, которая выдает результат как loops_for_loop
-    Эта функция не вызывает алгоритм сбора перпендикулярных колец, а отображает готовый результат вызова для одной области
-    Функция работает только с симметрией по оХ
-    Не учитывает и не записывает отображенные грани в посещенные! Просто создает симметричный result
-    '''
-    symm_list_orto_rings: List[Tuple[List[BMFace], List[BMLoop], int]] = []
-    for idx, item in enumerate(list_orto_rings):
-        (faces_in_loop, loops, change_direction_face) = item
-        symm_face_ring = make_symmetrical_face_list(faces_in_loop, bm, symm_dict)
-        symm_loop_ring = make_symmetrical_loop_list(symm_face_ring, change_direction_face, len(loops))
-        symm_list_orto_rings.append([symm_face_ring, symm_loop_ring, change_direction_face])
-    return symm_list_orto_rings
 
 ##############################################################################################################################################
 ##############################################################################################################################################
@@ -3096,7 +3091,12 @@ class RingsCollector(Operator):
             use_left_side = True
         faces_to_vector_dict, list_of_results = make_basic_vectors_for_all_grid(bm, grid_edges, visited_faces_id, FACE_TO_ZONE_LAYER_NAME, zones_dict, concentric_result,
                                                                                 self.len_coeff, self.use_symmetry, symm_file_name, use_left_side)
-    
+       # i = 0
+       # for face in bm.faces:
+       #     if (is_quad(face)):
+       #         i += 1
+        
+
         # постройка векторов
         vectormesh_index = get_last_strokemesh_index(VECTORMESH_COL_NAME)
         vectormesh_index += 1
