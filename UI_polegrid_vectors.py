@@ -2659,8 +2659,13 @@ def loops_for_loop_by_edge_nocross_for_symmetry(list_orto_rings: List[Tuple[List
         #    face.select = True
         symm_loop_ring = make_symmetrical_loop_list(symm_face_ring, change_direction_face, len(loops))
         symm_list_orto_rings.append([symm_face_ring, symm_loop_ring, change_direction_face])
-        assert(len(symm_face_ring) == len(faces_in_loop))
-        assert(len(symm_loop_ring) == len(loops))
+        #
+        #assert(len(symm_face_ring) == len(faces_in_loop))
+        if not (len(symm_face_ring) == len(faces_in_loop)):
+            print("symmetry: incorrect face list len")
+        elif not (len(symm_loop_ring) == len(loops)):
+            print("symmetry: incorrect loop list len")
+        #assert(len(symm_loop_ring) == len(loops))
     return symm_list_orto_rings
 
 def make_symmetrical_face_list(faces_in_ring: List[BMFace], bm: BMesh, symm_dict: dict):

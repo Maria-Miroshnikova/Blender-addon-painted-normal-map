@@ -890,9 +890,17 @@ def read_start_edge_and_ignore_selected_border_edges(bm: BMesh, layer_name: str)
 import json
 
 def read_layers_file_to_dictionary(file_name):
-    with open(file_name) as f:
-        layers = json.load(f)
-    return layers
+    try:
+        f = open(file_name, 'r')
+        f.close()
+        with open(file_name) as f:
+            layers = json.load(f)
+        return layers
+    except FileNotFoundError:
+        f = open(file_name, "w")
+        f.write(json.dumps({}))
+        f.close()
+        return {}
 
 # работает из с невидимостью меша, и с невидимостью целой коллекции! 
 def recalculate_strokemesh_layers_from_layer_dictionary(bm: BMesh, strokemesh_name_base: str, layer_dict: dict):
@@ -1133,15 +1141,17 @@ def read_symmetry_dict_from_file(filename: str):
     try:
         f = open(filename, 'r')
         f.close()
+        with open(filename) as f:
+            symm_dict_str = json.load(f)
+            symm_dict = {}
+            for key in symm_dict_str.keys():
+                symm_dict[int(key)] = symm_dict_str[key]
+        return symm_dict
     except FileNotFoundError:
-        return None
-
-    with open(filename) as f:
-        symm_dict_str = json.load(f)
-        symm_dict = {}
-        for key in symm_dict_str.keys():
-            symm_dict[int(key)] = symm_dict_str[key]
-    return symm_dict
+        f = open(filename, "w")
+        f.write(json.dumps({}))
+        f.close()
+        return  None
 
 def write_symmetry_dict_to_file(filename: str, symm_dict: dict):
     with open(filename, 'w') as f:
@@ -1158,7 +1168,7 @@ def test_loops_for_loop_nocross_inside_borders_auto_visited(MESH_NAME_BASE: str,
 
     if (with_symmetry):
         symm_dict = read_symmetry_dict_from_file(symm_file_name)
-        if (symm_dict == None):
+        if (symm_dict == None) or (len(symm_dict) == 0):
             symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
             write_symmetry_dict_to_file(symm_file_name, symm_dict)
     else:
@@ -1281,7 +1291,7 @@ def test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP: float, COL_NAME:
 
     if (with_symmetry):
         symm_dict = read_symmetry_dict_from_file(symm_file_name)
-        if symm_dict == None:
+        if  (symm_dict == None) or (len(symm_dict) == 0):
             symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
             write_symmetry_dict_to_file(symm_file_name, symm_dict)
     else:
@@ -1424,7 +1434,7 @@ class FaceLoopsCurvesGenerator(Operator):
         Z_STEP = 0.1
         LAYER_NAME_EDGE_IS_BORDER = "is_border_edge"
         #STROKEMESH_LAYERS_FILE_NAME = mesh_obj.name + "_strokemesh_layers.json"
-        STROKEMESH_LAYERS_FILE_NAME = "strokemesh_layers.json"
+        STROKEMESH_LAYERS_FILE_NAME = "_strokemesh_layers.json"
         SYMMETRY_DICT_FILE_NAME = mesh_obj.name + "_symm_dict.json"
 
         last_col_idx = get_last_collection_index(COLLECTION_NAME_BASE)
@@ -1445,15 +1455,16 @@ class FaceLoopsCurvesGenerator(Operator):
 
         new_col_name = COLLECTION_NAME_BASE + str(last_col_idx + 1)
         new_strokemesh_idx_start = last_strokemesh_idx + 1
+        layers_file_name = mesh_obj.name + STROKEMESH_LAYERS_FILE_NAME
          ###### вызов автообхода, опционально: с симметрией / с границами / внутри области вызова или на всем меше
         if (self.use_auto or self.use_auto_local):
             test_auto_strokes_nocross_inside_borders_with_layer(Z_STEP, new_col_name, STROKEMESH_NAME_BASE, new_strokemesh_idx_start, new_z_coord,
-                                                                LAYER_NAME_EDGE_IS_BORDER, self.use_symmetry, STROKEMESH_LAYERS_FILE_NAME,
+                                                                LAYER_NAME_EDGE_IS_BORDER, self.use_symmetry, layers_file_name,
                                                                 SYMMETRY_DICT_FILE_NAME, self.use_auto_local, self.use_edge_borders)
 
         else: # одноразовый сбор перпендикуляров, опционально: с симметрией / с границами
             test_loops_for_loop_nocross_inside_borders_auto_visited(STROKEMESH_NAME_BASE, new_strokemesh_idx_start, Z_STEP, new_col_name, new_z_coord,
-                                                                    LAYER_NAME_EDGE_IS_BORDER, STROKEMESH_LAYERS_FILE_NAME, SYMMETRY_DICT_FILE_NAME,
+                                                                    LAYER_NAME_EDGE_IS_BORDER, layers_file_name, SYMMETRY_DICT_FILE_NAME,
                                                                     self.use_symmetry, self.use_edge_borders)
         return
     
