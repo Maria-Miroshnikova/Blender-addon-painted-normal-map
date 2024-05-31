@@ -1605,8 +1605,9 @@ def create_and_add_vector_to_vectormesh(vectormesh: BMesh, v1: Vector, v2: Vecto
 
     for i in range(idx_start_verts, idx_start_verts + 2):
         vectormesh.verts[i].index = i    
-    vectormesh.edges[idx_start_edge].index = i
-    return
+    #vectormesh.edges[idx_start_edge].index = i
+    vectormesh.edges[idx_start_edge].index = idx_start_edge
+    return idx_start_edge
 
 def  count_UV_coords_for_two_basic_verts_all_faces(faces: List[BMFace], loops: List[BMLoop], faces_to_vector_dict: dict, bm: BMesh, len_coeff: float):
     for loop in loops:
@@ -1620,6 +1621,59 @@ def  count_UV_coords_for_two_basic_verts_all_faces(faces: List[BMFace], loops: L
                    # print("----------------")
                 faces_to_vector_dict[loop.face.index] = (p, q, loop.index)
 
+# симметрия по близости ожидаемого центра грани и действительного центра грани
+# ОГРАНИЧЕНИЯ:
+# 1) O(n^2) от количества граней. Задумывается на модели ~10к граней
+# 2) Не работает на слишком маленьких гранях
+# 3) Только для моделей, симметричных по oX и расположенно центром в 0 по X
+# 4) Только для ЗЕРКАЛЬНЫХ моделей: разрез по OX = линия, а не кольцо граней
+# 5) Возможно, будет плохо работать на моделях с утолщением, рожками и других, где есть узкие расстояния между гранями
+def make_symmetry_dictionary_by_median_similarity(bm: BMesh):
+    '''
+    Функция устанавливает соответствие между индексами симметричных граней
+    Возвращает словарь (индекс грани : индекс симметричной грани)
+    Ключей столько же, сколько граней ! не половина
+    См. ограничения функции!!
+    '''
+    symm_dict = {} # face_id1 : face_id2, face_id2 : face_id1
+
+    id_median_x_positive = []
+    id_median_x_negative = []
+                                                                                 
+    for face in bm.faces:
+        median: Vector = face.calc_center_median()
+        if (median.x > 0):
+            id_median_x_positive.append((face.index, median))
+        else:
+            id_median_x_negative.append((face.index, median))
+    # надеюсь, что не будет проблем с близостью к нулю....
+    assert(len(id_median_x_negative) == len(id_median_x_positive))
+
+    for tuple1 in id_median_x_negative:
+        (index1, median1) = tuple1
+        median_symm_expected1: Vector = Vector((-median1.x, median1.y, median1.z))
+
+        min_index = -1
+        for tuple2 in id_median_x_positive:
+            (index2, median2) = tuple2
+            # ПАРАМЕТР ТОЧНОСТИ
+            rel_tol = 1e-4
+            x_close = math.isclose(median_symm_expected1.x, median2.x, rel_tol=rel_tol)
+            y_close = math.isclose(median_symm_expected1.y, median2.y, rel_tol=rel_tol)
+            z_close = math.isclose(median_symm_expected1.z, median2.z, rel_tol=rel_tol)
+            if x_close and y_close and z_close:
+                min_index = index2
+                break
+        #if (min_index < 0):
+        #    print("problem")
+        assert(min_index >= 0)
+        symm_dict[index1] = min_index
+        symm_dict[min_index] = index1
+    return symm_dict
+
+def is_close_float(float1, float2, tolerance):
+    return abs(float1 - float2) < tolerance
+
 def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited_faces_id: Set[int], layer_name: str, zones_dict: dict,
                                     concentric_result: List[Tuple[List[BMFace], List[BMLoop], int]], len_coeff: float,
                                     use_symmetry: bool, symm_file_name: str, use_left_side: bool):
@@ -1630,6 +1684,9 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
     # если обход с симметрией, то надо обходить только одну сторону. Запишем все грани второй стороны в посещенные.
     if (use_symmetry):
         symm_dict = read_symmetry_dict_from_file(symm_file_name)
+        if (symm_dict == None) or (len(symm_dict) == 0):
+            symm_dict = make_symmetry_dictionary_by_median_similarity(bm)
+            write_symmetry_dict_to_file(symm_file_name, symm_dict)
         left_faces_id = set()
         rigth_faces_id = set()
         for key in symm_dict.keys():
@@ -1727,16 +1784,17 @@ def make_basic_vectors_for_all_grid(bm: BMesh, grid_edges: List[BMEdge], visited
             count_UV_coords_for_two_basic_verts_all_faces(faces, loops, faces_to_vector_dict, bm, len_coeff)
     return faces_to_vector_dict, list_of_results
 
-def make_vectors_from_dict(faces_to_vector_dict: dict, vector_bm: BMesh):
+def make_vectors_from_dict(faces_to_vector_dict: dict, vector_bm: BMesh, face_to_edge_in_vectormesh_dict: dict):
     '''
     Функция для всех граней в словаре faces_to_vector_dict считывает точки (p,q, main_loop) вектора, посчитанного в этой грани.
     Строит этот вектор и добавляет в vector_bm 
     '''    
     for key in faces_to_vector_dict.keys():
-        v1, v2, edge = faces_to_vector_dict[key]
+        v1, v2, edge_id = faces_to_vector_dict[key]
         #v1, v2 = faces_to_vector_dict[key]
         #face = bm.faces[key]
-        create_and_add_vector_to_vectormesh(vector_bm, v1, v2)
+        idx_new_edge = create_and_add_vector_to_vectormesh(vector_bm, v1, v2)
+        face_to_edge_in_vectormesh_dict[idx_new_edge] = (key, edge_id)
     return
 
 def filter_face_with_vectors(bm: BMesh, face: BMFace, face_to_vector_dict: dict, filter_params: List[int], layer_name: str, zone_to_priority_dict: dict):
@@ -2274,6 +2332,7 @@ def filter_vectors_for_mesh(bm: BMesh, face_to_vector_dict: dict, len_coeff: flo
         for loop in bm.faces[key].loops:
             if loop.index == loop_start_id:
                 loop_start = loop
+                break
 
         # подсчет нового угла с помощью фильтра для грани с id = key
         
@@ -2761,6 +2820,49 @@ def get_start_loop_from_face_ring(symm_face_ring: List[BMFace], idx_change_dir):
 ##############################################################################################################################################
 ##############################################################################################################################################
 
+def write_vector_edge_to_face_size_dict_to_file(face_to_edge_in_vm_dict: dict, filename: str, bm: BMesh):
+    '''
+    Функция подготовки и записи словаря (edge_id_in_vectormesh: middle_line_size) в файл
+    '''
+    uv_layer = bm.loops.layers.uv.verify()
+    edge_to_size_dict = {}
+    for key in face_to_edge_in_vm_dict.keys():
+        face_id, loop_id = face_to_edge_in_vm_dict[key]
+        #edge = bm.edges[edge_id]
+        
+        #main_loop = edge.link_loops[0]
+        #if main_loop.face.index != face_id:
+        #    main_loop = edge.link_loops[1]
+
+        for loop in bm.faces[face_id].loops:
+            if loop.index == loop_id:
+                main_loop = loop
+                break
+
+        next_main_loop = main_loop.link_loop_next.link_loop_next
+
+        center_1 = main_loop[uv_layer].uv + main_loop.link_loop_next[uv_layer].uv
+        center_2 = next_main_loop[uv_layer].uv + next_main_loop[uv_layer].uv
+        middle_line_vector_size = (center_2 - center_1).magnitude
+
+        #edge_to_size_dict[key] = middle_line_vector_size
+        edge_to_size_dict[face_id] = middle_line_vector_size
+    with open(filename, 'w') as f:
+        f.write(json.dumps(edge_to_size_dict))
+    return
+
+def read_vector_edge_to_face_size_dict_from_file(filename: str):
+    '''
+    Функция чтения словаря (edge_id_in_vectormesh: middle_line_size) из файла
+    '''
+    with open(filename, 'r') as f:
+        edge_to_size_serialized_dict = json.load(f)
+
+    edge_to_size_dict = {}
+    for key in edge_to_size_serialized_dict.keys():
+        edge_to_size_dict[int(key)] = edge_to_size_serialized_dict[key]
+    return edge_to_size_dict
+
 import os
 
 def delete_not_existing_meshes_files():
@@ -2838,6 +2940,14 @@ class OBJECT_PT_GridPoleVectorFilterPanel(Panel):
         box.prop(props, "len_coeff")
 
         col.operator('object.filter_vectors')     
+
+        ######################################
+
+        col = layout.column()
+        col.label(text="4. Resize strokes proportionally to face")
+        #col.prop(props, "uv_obj")
+        col.operator('object.resize_strokes')
+
     
 
 # параметры для панели и для оператора (которые в функцию передаются)
@@ -2858,6 +2968,16 @@ class PoleGridVectorsProps(PropertyGroup):
             input.append((name, name, ""))
             i += 1
         return input
+    
+    def get_items(self, context):
+        object_names = [object.name for object in bpy.data.objects]
+        obj_names_enums = [("empty", "", "")]
+        obj_names_enums_ = [(name, name, "") for name in object_names]
+      #  obj_names_enums = []#[("empty", "", "")]
+       # obj_name_enums.extend([(name, name, "") for name in object_names])
+       # obj_names_enums.append(("empty", "", ""))
+        obj_names_enums.extend(obj_names_enums_)
+        return obj_names_enums
 
     use_symmetry_polegrid : BoolProperty(
         name = "Symmetrical",
@@ -2891,6 +3011,12 @@ class PoleGridVectorsProps(PropertyGroup):
         subtype="TRANSLATION"
         #default = []
     )
+    uv_obj: EnumProperty(
+        name="UV_object",
+        description="Отдельный объект, являющийся UV-разверткой объекта, к которому применяют оператор",
+        items=get_items
+    )
+
     len_coeff : FloatProperty(
         name = "Vector length",
         default = 0.0002,
@@ -2911,6 +3037,7 @@ FILTERED_VECTORS_FILENAME_BASE: str = "_filtered_vectors.json"
 VECTORMESH_COL_NAME: str = "VectorMeshes"
 VECTORMESH_OBJ_NAME_BASE: str = "VectorMesh_"
 SYMMETRY_DICT_FILE_NAME_BASE: str = "_symm_dict.json"
+EDGES_TO_FACE_SIZE_FILE_NAME_BASE: str = "_edges_to_sizes.json"
 
 # оператор, т. е. вызов функции. Здесь вся логика
 class PoleGridCreator(Operator):
@@ -3106,7 +3233,8 @@ class RingsCollector(Operator):
         vectormesh_index = get_last_strokemesh_index(VECTORMESH_COL_NAME)
         vectormesh_index += 1
         vector_bm, vector_obj = make_vectormesh(vectormesh_index)
-        make_vectors_from_dict(faces_to_vector_dict, vector_bm)
+        face_to_edge_in_vectormesh_dict = {}
+        make_vectors_from_dict(faces_to_vector_dict, vector_bm, face_to_edge_in_vectormesh_dict)
 
         # запись результатов обхода в файл: сетка полюсов, кольца ребер, словарь зон
         # -- запись в файл результатов обхода не концентров
@@ -3115,8 +3243,14 @@ class RingsCollector(Operator):
         # -- запись словаря векторов в файл
         base_vectors_file_name = mesh_obj.name + BASE_VECTORS_FILENAME_BASE
         write_face_to_vector_dict(faces_to_vector_dict, base_vectors_file_name)
+        # -- запись словаря для использования в resize
+        base_vectors_file_name_VECTORNAME = vector_obj.name + BASE_VECTORS_FILENAME_BASE
+        write_face_to_vector_dict(faces_to_vector_dict, base_vectors_file_name_VECTORNAME)
         # -- запись словаря зон в файл
         write_zones_dict(zones_dict, file_name_zones)
+        # -- запись словаря ребер вектормеша и граней в файл
+        file_name_edge_vm = vector_obj.name + EDGES_TO_FACE_SIZE_FILE_NAME_BASE
+        write_vector_edge_to_face_size_dict_to_file(face_to_edge_in_vectormesh_dict, file_name_edge_vm, bm)
 
         # чистка
         vector_bm.to_mesh(vector_obj.data)
@@ -3212,11 +3346,16 @@ class VectorFilter(Operator):
         vector_mesh_index = get_last_strokemesh_index(VECTORMESH_COL_NAME)
         vector_mesh_index += 1
         vector_bm, vector_obj = make_vectormesh(vector_mesh_index)
-        make_vectors_from_dict(faces_to_vector_dict, vector_bm)
+        face_to_edge_in_vectormesh_dict = {}
+        make_vectors_from_dict(faces_to_vector_dict, vector_bm, face_to_edge_in_vectormesh_dict)
+        
 
         # запись построенных векторов в файл
         file_name_save = VECTORMESH_OBJ_NAME_BASE + str(vector_mesh_index) + FILTERED_VECTORS_FILENAME_BASE
         write_face_to_vector_dict(faces_to_vector_dict, file_name_save)
+        # -- запись словаря ребер вектормеша и граней в файл
+        file_name_edge_vm = vector_obj.name + EDGES_TO_FACE_SIZE_FILE_NAME_BASE
+        write_vector_edge_to_face_size_dict_to_file(face_to_edge_in_vectormesh_dict, file_name_edge_vm, bm)
 
         # чистка
         vector_bm.to_mesh(vector_obj.data)
@@ -3234,6 +3373,113 @@ class VectorFilter(Operator):
         self.filter_vectors()
         
         return {'FINISHED'}
+    
+class StrokesResizer(Operator):
+    '''
+    
+    '''
+    bl_idname = 'object.resize_strokes'
+    bl_label = 'Resize strokes'
+
+    # params
+    uv_obj = None
+
+    def get_params(self, context):
+        props = context.object.polegrid_vector_props 
+        self.uv_obj = bpy.data.objects[props.uv_obj]
+    
+    def resize_strokes_with_raycast(self, context):
+       
+         #--- EDIT MODE!
+        # expected mesh: VectorMesh, converted to CURVE!
+        mesh_obj = bpy.context.active_object
+        bm = mesh_obj.data
+
+        #file_name = mesh_obj.name + BASE_VECTORS_FILENAME_BASE
+        #face_to_vector_dict = read_face_to_vector_dict(file_name)
+        file_name = mesh_obj.name + EDGES_TO_FACE_SIZE_FILE_NAME_BASE
+        face_to_size_dict = read_vector_edge_to_face_size_dict_from_file(file_name)
+
+        z = 1
+
+        for spline in bm.splines:
+            # ищем с помощью рэй кастинга грань
+            origin = Vector((spline.points[0].co[0], spline.points[0].co[1], z))
+            end = Vector((spline.points[0].co[0], spline.points[0].co[1], 0))
+            direction = end - origin
+            
+            result, location, normal, index = self.uv_obj.ray_cast(origin=origin, direction=direction)
+            # ишем размер средней линии для этой грани
+            middle_line_size_uv = face_to_size_dict[index]
+
+            for point in spline.points:
+                r = point.radius
+                point.radius = 1
+                point.radius = middle_line_size_uv / 2
+        
+        # считываем словарь из файлы
+        file_name = mesh_obj.name + EDGES_TO_FACE_SIZE_FILE_NAME_BASE
+        edge_id_to_middle_line_size_dict = read_vector_edge_to_face_size_dict_from_file(file_name)
+
+        # развыбрать векторы
+        # проходиться по каждому, выбирать его, применять оператор, развыбрать
+        # как это сделать чисто по индексу?? 
+        for edge in bm.edges:
+            edge.select = False
+        for key in edge_id_to_middle_line_size_dict.keys():
+            bm.edges[key].select = True
+            
+
+        #for edge in bm.edges:
+
+    def resize_strokes(self, context):
+       
+         #--- EDIT MODE!
+        # expected mesh: VectorMesh, converted to CURVE!
+        mesh_obj = bpy.context.active_object
+        bm = mesh_obj.data
+
+        file_name_vectors = mesh_obj.name + BASE_VECTORS_FILENAME_BASE
+        face_to_vector_dict = read_face_to_vector_dict(file_name_vectors)
+        file_name = mesh_obj.name + EDGES_TO_FACE_SIZE_FILE_NAME_BASE
+        face_to_size_dict = read_vector_edge_to_face_size_dict_from_file(file_name)
+
+        z = 1
+        rel_tol = 1e-4
+
+        for spline in bm.splines:
+            index = None
+
+            # ищем с помощью сравнение близости
+            point = spline.points[0]
+            for key, value in face_to_vector_dict.items():
+                p, q, loop = value
+                p_x_is_close = isclose(p.x, point.co[0], rel_tol)
+                p_y_is_close = isclose(p.y, point.co[1], rel_tol)
+
+                q_x_is_close = isclose(q.x, point.co[0], rel_tol)
+                q_y_is_close = isclose(q.y, point.co[1], rel_tol)
+
+                if (p_x_is_close and p_y_is_close) or (q_x_is_close and q_y_is_close):
+                    index = key
+
+            assert(index != None)
+            # ишем размер средней линии для этой грани
+            middle_line_size_uv = face_to_size_dict[index]
+
+            for point in spline.points:
+                r = point.radius
+                point.radius = 1
+                point.radius = middle_line_size_uv * 5
+    
+    def execute(self, context):
+       # raise NotImplementedError
+        
+        # вызываем все нужные функции
+        #self.get_params(context)
+        self.resize_strokes(context)
+        
+        return {'FINISHED'}
 
 classes = [
     PoleGridVectorsProps,
@@ -3242,6 +3488,7 @@ classes = [
     ShowPoleGridHandler,
     AddEdgeBorderToGridPoleHandler,
     VectorFilter,
+    StrokesResizer,
     OBJECT_PT_GridPoleVectorFilterPanel
 ]
 
