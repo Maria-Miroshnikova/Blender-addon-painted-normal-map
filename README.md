@@ -1,2 +1,5 @@
-# Blender-addon-painted-normal-map
-Addon for blender to generate curves of strokes, based on mesh topology, or just random strokes on object`s normal map
+# Blender-аддон для создания штрихов краски на 3D моделях
+
+## Описание
+
+Данный аддон является развитием инструмента из [![этого видео](demo/2025-09-15_22-32-47.png)](https://www.youtube.com/watch?v=s8N00rjil_4)
